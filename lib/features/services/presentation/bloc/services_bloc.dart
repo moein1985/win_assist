@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:logger/logger.dart';
 import 'package:win_assist/core/usecases/usecase.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/usecases/get_services.dart';
@@ -44,8 +45,11 @@ class ServicesError extends ServicesState {
 
 class ServicesBloc extends Bloc<ServicesEvent, ServicesState> {
   final GetServices getServices;
+  final Logger logger;
 
-  ServicesBloc({required this.getServices}) : super(ServicesInitial()) {
+  ServicesBloc({required this.getServices, required Logger? logger})
+      : logger = logger ?? Logger(),
+        super(ServicesInitial()) {
     on<GetServicesEvent>(_onGetServices);
   }
 
@@ -53,11 +57,18 @@ class ServicesBloc extends Bloc<ServicesEvent, ServicesState> {
     GetServicesEvent event,
     Emitter<ServicesState> emit,
   ) async {
+    logger.d('ServicesBloc: Fetching services');
     emit(ServicesLoading());
     final result = await getServices(NoParams());
     result.fold(
-      (failure) => emit(ServicesError(message: failure.message)),
-      (services) => emit(ServicesLoaded(services: services)),
+      (failure) {
+        logger.e('ServicesBloc: Error fetching services: ${failure.message}');
+        emit(ServicesError(message: failure.message));
+      },
+      (services) {
+        logger.i('ServicesBloc: Services loaded successfully: ${services.length} services');
+        emit(ServicesLoaded(services: services));
+      },
     );
   }
 }

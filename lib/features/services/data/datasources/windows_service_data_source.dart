@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:dartssh2/dartssh2.dart';
-import 'package:flutter/foundation.dart';
+import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 
@@ -13,6 +13,10 @@ abstract class WindowsServiceDataSource {
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
+  final Logger logger;
+
+  WindowsServiceDataSourceImpl({required this.logger});
+
   SSHClient? _client;
 
   @override
@@ -21,10 +25,10 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
   @override
   Future<void> connect(String ip, int port, String username, String password) async {
     if (isConnected) {
-      debugPrint('Already connected.');
+      logger.i('Already connected.');
       return;
     }
-    debugPrint('Connecting to $ip:$port...');
+    logger.i('Connecting to $ip:$port...');
     try {
       final socket = await SSHSocket.connect(ip, port, timeout: const Duration(seconds: 15));
       _client = SSHClient(
@@ -34,9 +38,9 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       );
       // Wait for the client to be ready
       await _client!.authenticated;
-      debugPrint('SSH connection successful.');
+      logger.i('SSH connection successful.');
     } catch (e) {
-      debugPrint('Connection failed: $e');
+      logger.e('Connection failed: $e');
       _client = null;
       rethrow;
     }
@@ -45,35 +49,22 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
   @override
   Future<DashboardInfo> getDashboardInfo() async {
     if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
       throw Exception('Not connected. Please call connect() first.');
     }
 
-    const command = r'''
-      $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem;
-      $csInfo = Get-CimInstance -ClassName Win32_ComputerSystem;
-      $diskInfo = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'";
+    const command = r'''$ProgressPreference = 'SilentlyContinue'; $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem; $csInfo = Get-CimInstance -ClassName Win32_ComputerSystem; $diskInfo = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"; @{ OsName = if ($osInfo.Caption) { $osInfo.Caption } else { "N/A" }; CsModel = if ($csInfo.Model) { $csInfo.Model } else { "N/A" }; CsTotalPhysicalMemory = if ($csInfo.TotalPhysicalMemory) { $csInfo.TotalPhysicalMemory } else { 0 }; OsFreePhysicalMemoryInBytes = if ($osInfo.FreePhysicalMemory) { [long]($osInfo.FreePhysicalMemory * 1024) } else { 0 }; DriveC_Free = if ($diskInfo.FreeSpace) { $diskInfo.FreeSpace } else { 0 }; DriveC_Total = if ($diskInfo.Size) { $diskInfo.Size } else { 0 } } | ConvertTo-Json -Compress''';
 
-      $output = @{
-          OsName = $osInfo.Caption;
-          CsModel = $csInfo.Model;
-          CsTotalPhysicalMemory = $csInfo.TotalPhysicalMemory;
-          OsFreePhysicalMemoryInBytes = [long]($osInfo.FreePhysicalMemory * 1024);
-          DriveC_Free = $diskInfo.FreeSpace;
-          DriveC_Total = $diskInfo.Size
-      }
-
-      $output | ConvertTo-Json -Compress
-    ''';
-
-    debugPrint('Executing getDashboardInfo command...');
+    logger.d('Executing getDashboardInfo command...');
     try {
       final jsonString = await _execute(command);
       if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for dashboard info.');
         throw Exception('Received empty response from server for dashboard info.');
       }
       return DashboardInfo.fromJson(jsonDecode(jsonString));
     } catch (e) {
-      debugPrint('Error getting dashboard info: $e');
+      logger.e('Error getting dashboard info: $e');
       rethrow;
     }
   }
@@ -81,14 +72,17 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
   @override
   Future<List<ServiceItem>> getServices() async {
     if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
       throw Exception('Not connected. Please call connect() first.');
     }
 
-    const command = 'Get-Service | Select-Object ServiceName, DisplayName, Status | ConvertTo-Json -Compress';
-    debugPrint('Executing getServices command...');
+    const command =
+        r'''$ProgressPreference = 'SilentlyContinue'; Get-Service | Select-Object ServiceName, DisplayName, Status | ConvertTo-Json -Compress''';
+    logger.d('Executing getServices command...');
     try {
       final jsonString = await _execute(command);
        if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for services.');
         throw Exception('Received empty response from server for services.');
       }
       // Handle the case where a single JSON object is returned
@@ -100,17 +94,27 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       final List<dynamic> jsonList = jsonDecode(jsonString);
       return jsonList.map((json) => ServiceItem.fromJson(json)).toList();
     } catch (e) {
-      debugPrint('Error getting services: $e');
+      logger.e('Error getting services: $e');
       rethrow;
     }
   }
 
   Future<String> _execute(String command) async {
-    final session = await _client!.execute('powershell -NoProfile -Command "$command"');
+    logger.d('Executing command: $command');
+    // PowerShell's -EncodedCommand expects a Base64-encoded string of a UTF-16LE command.
+    final List<int> commandBytes = [];
+    for (final codeUnit in command.codeUnits) {
+      commandBytes.add(codeUnit & 0xFF);
+      commandBytes.add(codeUnit >> 8);
+    }
+    final base64Command = base64.encode(commandBytes);
+
+    final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
     final output = await utf8.decodeStream(session.stdout);
     final error = await utf8.decodeStream(session.stderr);
 
     if (error.isNotEmpty) {
+      logger.e('PowerShell Error: $error');
       throw Exception('PowerShell Error: $error');
     }
     return output.trim();
@@ -119,7 +123,7 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
   @override
   void disconnect() {
     if (isConnected) {
-      debugPrint('Disconnecting...');
+      logger.i('Disconnecting...');
       _client?.close();
       _client = null;
     }

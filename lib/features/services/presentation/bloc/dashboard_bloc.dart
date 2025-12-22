@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:logger/logger.dart';
 import 'package:win_assist/core/usecases/usecase.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/usecases/get_dashboard_info.dart';
@@ -44,8 +45,11 @@ class DashboardError extends DashboardState {
 
 class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
   final GetDashboardInfo getDashboardInfo;
+  final Logger logger;
 
-  DashboardBloc({required this.getDashboardInfo}) : super(DashboardInitial()) {
+  DashboardBloc({required this.getDashboardInfo, required Logger? logger})
+      : logger = logger ?? Logger(),
+        super(DashboardInitial()) {
     on<GetDashboardInfoEvent>(_onGetDashboardInfo);
   }
 
@@ -53,11 +57,18 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
     GetDashboardInfoEvent event,
     Emitter<DashboardState> emit,
   ) async {
+    logger.d('DashboardBloc: Fetching dashboard info');
     emit(DashboardLoading());
     final result = await getDashboardInfo(NoParams());
     result.fold(
-      (failure) => emit(DashboardError(message: failure.message)),
-      (dashboardInfo) => emit(DashboardLoaded(dashboardInfo: dashboardInfo)),
+      (failure) {
+        logger.e('DashboardBloc: Error fetching dashboard info: ${failure.message}');
+        emit(DashboardError(message: failure.message));
+      },
+      (dashboardInfo) {
+        logger.i('DashboardBloc: Dashboard info loaded successfully');
+        emit(DashboardLoaded(dashboardInfo: dashboardInfo));
+      },
     );
   }
 }

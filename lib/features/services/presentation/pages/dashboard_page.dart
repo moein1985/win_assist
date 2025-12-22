@@ -15,16 +15,19 @@ class DashboardPage extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         } else if (state is DashboardError) {
           return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text('Error: ${state.message}'),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () => context.read<DashboardBloc>().add(GetDashboardInfoEvent()),
-                  child: const Text('Retry'),
-                ),
-              ],
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('Error: ${state.message}'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => context.read<DashboardBloc>().add(GetDashboardInfoEvent()),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
             ),
           );
         } else if (state is DashboardLoaded) {

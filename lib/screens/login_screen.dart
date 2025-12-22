@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/data/datasources/windows_service_data_source.dart';
 import 'package:win_assist/injection_container.dart' as di;
 import 'package:win_assist/screens/home_screen.dart';
@@ -15,6 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _ipController = TextEditingController(text: '192.168.85.97');
   final _userController = TextEditingController();
   final _passController = TextEditingController();
+  final Logger logger = di.sl<Logger>();
 
   bool _isLoading = false;
   String? _errorMessage;
@@ -31,12 +33,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final dataSource = di.sl<WindowsServiceDataSource>();
     try {
+      logger.i('Attempting to connect to server: ${_ipController.text}');
       await dataSource.connect(
         _ipController.text,
         22,
         _userController.text,
         _passController.text,
       );
+      logger.i('Connection successful, navigating to home screen');
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -46,6 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
     } catch (e) {
+      logger.e('Login failed: $e');
       setState(() {
         _errorMessage = 'Failed to connect: ${e.toString()}';
       });
