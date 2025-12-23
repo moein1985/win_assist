@@ -54,6 +54,14 @@
 - `lib/features/sessions/data/repositories/sessions_repository_impl.dart`
 - `lib/features/sessions/presentation/bloc/sessions_bloc.dart`
 - `lib/features/sessions/presentation/pages/sessions_page.dart`
+- `lib/features/maintenance/domain/repositories/maintenance_repository.dart`
+- `lib/features/maintenance/data/repositories/maintenance_repository_impl.dart`
+- `lib/features/maintenance/domain/usecases/clean_temp_files.dart`
+- `lib/features/maintenance/domain/usecases/flush_dns.dart`
+- `lib/features/maintenance/domain/usecases/restart_server.dart`
+- `lib/features/maintenance/domain/usecases/shutdown_server.dart`
+- `lib/features/maintenance/presentation/bloc/maintenance_bloc.dart`
+- `lib/features/maintenance/presentation/pages/maintenance_page.dart`
 
 ---
 
@@ -159,6 +167,15 @@ import 'package:win_assist/features/sessions/domain/usecases/get_remote_sessions
 import 'package:win_assist/features/sessions/domain/usecases/kill_session.dart';
 import 'package:win_assist/features/sessions/presentation/bloc/sessions_bloc.dart';
 
+// Maintenance feature
+import 'package:win_assist/features/maintenance/data/repositories/maintenance_repository_impl.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/clean_temp_files.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/flush_dns.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/restart_server.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/shutdown_server.dart';
+import 'package:win_assist/features/maintenance/presentation/bloc/maintenance_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -187,6 +204,10 @@ Future<void> init() async {
   sl.registerLazySingleton<SessionsRepository>(
     () => SessionsRepositoryImpl(dataSource: sl(), logger: sl()),
   );
+  // Maintenance repository
+  sl.registerLazySingleton<MaintenanceRepository>(
+    () => MaintenanceRepositoryImpl(dataSource: sl(), logger: sl()),
+  );
 
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
@@ -199,11 +220,18 @@ Future<void> init() async {
   // Sessions use cases
   sl.registerLazySingleton(() => GetRemoteSessions(sl()));
   sl.registerLazySingleton(() => KillSession(sl()));
+  // Maintenance use cases
+  sl.registerLazySingleton(() => CleanTempFiles(sl()));
+  sl.registerLazySingleton(() => FlushDns(sl()));
+  sl.registerLazySingleton(() => RestartServer(sl()));
+  sl.registerLazySingleton(() => ShutdownServer(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
   sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
   sl.registerFactory(() => UsersBloc(getLocalUsers: sl(), toggleUserStatus: sl(), resetUserPassword: sl(), logger: sl()));
+  sl.registerFactory(() => SessionsBloc(getRemoteSessions: sl(), killSession: sl(), logger: sl()));
+  sl.registerFactory(() => MaintenanceBloc(cleanTempFiles: sl(), flushDns: sl(), restartServer: sl(), shutdownServer: sl(), logger: sl()));
 }
 ```
 
@@ -609,14 +637,45 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
     }
     final base64Command = base64.encode(commandBytes);
 
-    final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
-    final output = await utf8.decodeStream(session.stdout);
-    final error = await utf8.decodeStream(session.stderr);
+    // Helper to execute a single time
+    Future<Map<String, String>> _runOnce() async {
+      final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
+      final out = await utf8.decodeStream(session.stdout);
+      final err = await utf8.decodeStream(session.stderr);
+      return {'out': out, 'err': err};
+    }
+
+    final result = await _runOnce();
+    var output = result['out'] ?? '';
+    var error = result['err'] ?? '';
 
     if (error.isNotEmpty) {
-      logger.e('PowerShell Error: $error');
-      throw Exception('PowerShell Error: $error');
+      // Detect benign module-loading/progress CLIXML messages which are not fatal
+      final lower = error.toLowerCase();
+      final isBenign = error.contains('Preparing modules for first use') || error.contains('<Objs') || error.startsWith('#< CLIXML') || lower.contains('preparing modules for first use');
+      if (isBenign) {
+        logger.w('PowerShell warning (ignored): $error');
+        // retry once after a short delay, hoping modules finish loading
+        await Future.delayed(const Duration(milliseconds: 300));
+        final retry = await _runOnce();
+        output = retry['out'] ?? '';
+        error = retry['err'] ?? '';
+        if (error.isNotEmpty) {
+          final lowered = error.toLowerCase();
+          final stillBenign = error.contains('Preparing modules for first use') || error.contains('<Objs') || error.startsWith('#< CLIXML') || lowered.contains('preparing modules for first use');
+          if (!stillBenign) {
+            logger.e('PowerShell Error (retry): $error');
+            throw Exception('PowerShell Error: $error');
+          } else {
+            logger.w('PowerShell warning on retry (ignored): $error');
+          }
+        }
+      } else {
+        logger.e('PowerShell Error: $error');
+        throw Exception('PowerShell Error: $error');
+      }
     }
+
     return output.trim();
   }
 
@@ -2548,6 +2607,426 @@ class UsersBloc extends Bloc<UsersEvent, UsersState> {
     );
   }
 }
+
+---
+
+## `lib/features/maintenance/domain/repositories/maintenance_repository.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+
+abstract class MaintenanceRepository {
+  Future<Either<Failure, String>> cleanTempFiles();
+  Future<Either<Failure, String>> flushDns();
+  Future<Either<Failure, Unit>> restartServer();
+  Future<Either<Failure, Unit>> shutdownServer();
+}
+```
+
+---
+
+## `lib/features/maintenance/data/repositories/maintenance_repository_impl.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:logger/logger.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+import 'package:win_assist/features/services/data/datasources/windows_service_data_source.dart';
+
+class MaintenanceRepositoryImpl implements MaintenanceRepository {
+  final WindowsServiceDataSource dataSource;
+  final Logger logger;
+
+  MaintenanceRepositoryImpl({required this.dataSource, required this.logger});
+
+  @override
+  Future<Either<Failure, String>> cleanTempFiles() async {
+    try {
+      logger.d('Cleaning temp files via data source');
+      final result = await dataSource.cleanTempFiles();
+      logger.i('Clean temp files result: $result');
+      return Right(result);
+    } catch (e) {
+      logger.e('Failed to clean temp files: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, String>> flushDns() async {
+    try {
+      logger.d('Flushing DNS via data source');
+      final result = await dataSource.flushDns();
+      logger.i('Flush DNS result: $result');
+      return Right(result);
+    } catch (e) {
+      logger.e('Failed to flush DNS: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, Unit>> restartServer() async {
+    try {
+      logger.d('Restarting server via data source');
+      await dataSource.restartServer();
+      logger.i('Restart command sent');
+      return Right(unit);
+    } catch (e) {
+      logger.e('Failed to restart server: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, Unit>> shutdownServer() async {
+    try {
+      logger.d('Shutting down server via data source');
+      await dataSource.shutdownServer();
+      logger.i('Shutdown command sent');
+      return Right(unit);
+    } catch (e) {
+      logger.e('Failed to shutdown server: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/domain/usecases/clean_temp_files.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+
+class CleanTempFiles implements UseCase<String, NoParams> {
+  final MaintenanceRepository repository;
+
+  CleanTempFiles(this.repository);
+
+  @override
+  Future<Either<Failure, String>> call(NoParams params) async {
+    return await repository.cleanTempFiles();
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/domain/usecases/flush_dns.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+
+class FlushDns implements UseCase<String, NoParams> {
+  final MaintenanceRepository repository;
+
+  FlushDns(this.repository);
+
+  @override
+  Future<Either<Failure, String>> call(NoParams params) async {
+    return await repository.flushDns();
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/domain/usecases/restart_server.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+
+class RestartServer implements UseCase<Unit, NoParams> {
+  final MaintenanceRepository repository;
+
+  RestartServer(this.repository);
+
+  @override
+  Future<Either<Failure, Unit>> call(NoParams params) async {
+    return await repository.restartServer();
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/domain/usecases/shutdown_server.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+
+class ShutdownServer implements UseCase<Unit, NoParams> {
+  final MaintenanceRepository repository;
+
+  ShutdownServer(this.repository);
+
+  @override
+  Future<Either<Failure, Unit>> call(NoParams params) async {
+    return await repository.shutdownServer();
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/presentation/bloc/maintenance_bloc.dart`
+
+```dart
+import 'package:bloc/bloc.dart';
+import 'package:equatable/equatable.dart';
+import 'package:logger/logger.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/clean_temp_files.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/flush_dns.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/restart_server.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/shutdown_server.dart';
+
+part 'maintenance_event.dart';
+part 'maintenance_state.dart';
+
+class MaintenanceBloc extends Bloc<MaintenanceEvent, MaintenanceState> {
+  final CleanTempFiles cleanTempFiles;
+  final FlushDns flushDns;
+  final RestartServer restartServer;
+  final ShutdownServer shutdownServer;
+  final Logger logger;
+
+  MaintenanceBloc({
+    required this.cleanTempFiles,
+    required this.flushDns,
+    required this.restartServer,
+    required this.shutdownServer,
+    required Logger? logger,
+  })  : logger = logger ?? Logger(),
+        super(MaintenanceInitial()) {
+    on<CleanTempEvent>(_onCleanTemp);
+    on<FlushDnsEvent>(_onFlushDns);
+    on<RestartServerEvent>(_onRestart);
+    on<ShutdownServerEvent>(_onShutdown);
+  }
+
+  Future<void> _onCleanTemp(CleanTempEvent event, Emitter<MaintenanceState> emit) async {
+    logger.d('Maintenance: CleanTempFiles');
+    emit(MaintenanceLoading(action: 'clean'));
+    final result = await cleanTempFiles(NoParams());
+    result.fold(
+      (failure) {
+        logger.e('CleanTempFiles failed: ${failure.message}');
+        emit(MaintenanceError(message: failure.message));
+      },
+      (message) {
+        logger.i('CleanTempFiles success: $message');
+        emit(MaintenanceSuccess(message: message));
+      },
+    );
+  }
+
+  Future<void> _onFlushDns(FlushDnsEvent event, Emitter<MaintenanceState> emit) async {
+    logger.d('Maintenance: FlushDns');
+    emit(MaintenanceLoading(action: 'flush'));
+    final result = await flushDns(NoParams());
+    result.fold(
+      (failure) {
+        logger.e('FlushDns failed: ${failure.message}');
+        emit(MaintenanceError(message: failure.message));
+      },
+      (message) {
+        logger.i('FlushDns success: $message');
+        emit(MaintenanceSuccess(message: message));
+      },
+    );
+  }
+
+  Future<void> _onRestart(RestartServerEvent event, Emitter<MaintenanceState> emit) async {
+    logger.d('Maintenance: RestartServer');
+    emit(MaintenanceLoading(action: 'restart'));
+    final result = await restartServer(NoParams());
+    result.fold(
+      (failure) {
+        logger.e('Restart failed: ${failure.message}');
+        emit(MaintenanceError(message: failure.message));
+      },
+      (_) {
+        logger.i('Restart command issued');
+        emit(MaintenanceSuccess(message: 'Restart command issued'));
+      },
+    );
+  }
+
+  Future<void> _onShutdown(ShutdownServerEvent event, Emitter<MaintenanceState> emit) async {
+    logger.d('Maintenance: ShutdownServer');
+    emit(MaintenanceLoading(action: 'shutdown'));
+    final result = await shutdownServer(NoParams());
+    result.fold(
+      (failure) {
+        logger.e('Shutdown failed: ${failure.message}');
+        emit(MaintenanceError(message: failure.message));
+      },
+      (_) {
+        logger.i('Shutdown command issued');
+        emit(MaintenanceSuccess(message: 'Shutdown command issued'));
+      },
+    );
+  }
+}
+```
+
+---
+
+## `lib/features/maintenance/presentation/pages/maintenance_page.dart`
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:win_assist/features/maintenance/presentation/bloc/maintenance_bloc.dart';
+
+class MaintenancePage extends StatefulWidget {
+  const MaintenancePage({super.key});
+
+  @override
+  State<MaintenancePage> createState() => _MaintenancePageState();
+}
+
+class _MaintenancePageState extends State<MaintenancePage> {
+  late MaintenanceBloc _bloc;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bloc = BlocProvider.of<MaintenanceBloc>(context);
+  }
+
+  Future<bool?> _confirmDanger(BuildContext context, String actionLabel) async {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Confirm'),
+        content: Text('Are you sure? This will disconnect all users. ($actionLabel)'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Confirm')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('System Maintenance')),
+      body: BlocListener<MaintenanceBloc, MaintenanceState>(
+        listener: (context, state) {
+          if (state is MaintenanceSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(state.message)));
+          } else if (state is MaintenanceError) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${state.message}')));
+          }
+        },
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Optimization', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.cleaning_services),
+                        label: const Text('Clean Temp Files'),
+                        onPressed: () => _bloc.add(CleanTempEvent()),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.network_check),
+                        label: const Text('Flush DNS'),
+                        onPressed: () => _bloc.add(FlushDnsEvent()),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 24),
+              Text('Critical Zone', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Use with caution', style: TextStyle(color: Colors.orange)),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                            icon: const Icon(Icons.restart_alt),
+                            label: const Text('Restart Server'),
+                            onPressed: () async {
+                              final confirmed = await _confirmDanger(context, 'Restart');
+                              if (confirmed == true) {
+                                _bloc.add(RestartServerEvent());
+                              }
+                            },
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                            icon: const Icon(Icons.power_settings_new),
+                            label: const Text('Shutdown Server'),
+                            onPressed: () async {
+                              final confirmed = await _confirmDanger(context, 'Shutdown');
+                              if (confirmed == true) {
+                                _bloc.add(ShutdownServerEvent());
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 24),
+              BlocBuilder<MaintenanceBloc, MaintenanceState>(
+                builder: (context, state) {
+                  if (state is MaintenanceLoading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
 ```
 
 

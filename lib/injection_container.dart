@@ -26,6 +26,15 @@ import 'package:win_assist/features/sessions/domain/usecases/get_remote_sessions
 import 'package:win_assist/features/sessions/domain/usecases/kill_session.dart';
 import 'package:win_assist/features/sessions/presentation/bloc/sessions_bloc.dart';
 
+// Maintenance feature
+import 'package:win_assist/features/maintenance/data/repositories/maintenance_repository_impl.dart';
+import 'package:win_assist/features/maintenance/domain/repositories/maintenance_repository.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/clean_temp_files.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/flush_dns.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/restart_server.dart';
+import 'package:win_assist/features/maintenance/domain/usecases/shutdown_server.dart';
+import 'package:win_assist/features/maintenance/presentation/bloc/maintenance_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -54,6 +63,10 @@ Future<void> init() async {
   sl.registerLazySingleton<SessionsRepository>(
     () => SessionsRepositoryImpl(dataSource: sl(), logger: sl()),
   );
+  // Maintenance repository
+  sl.registerLazySingleton<MaintenanceRepository>(
+    () => MaintenanceRepositoryImpl(dataSource: sl(), logger: sl()),
+  );
 
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
@@ -66,10 +79,16 @@ Future<void> init() async {
   // Sessions use cases
   sl.registerLazySingleton(() => GetRemoteSessions(sl()));
   sl.registerLazySingleton(() => KillSession(sl()));
+  // Maintenance use cases
+  sl.registerLazySingleton(() => CleanTempFiles(sl()));
+  sl.registerLazySingleton(() => FlushDns(sl()));
+  sl.registerLazySingleton(() => RestartServer(sl()));
+  sl.registerLazySingleton(() => ShutdownServer(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
   sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
   sl.registerFactory(() => UsersBloc(getLocalUsers: sl(), toggleUserStatus: sl(), resetUserPassword: sl(), logger: sl()));
   sl.registerFactory(() => SessionsBloc(getRemoteSessions: sl(), killSession: sl(), logger: sl()));
+  sl.registerFactory(() => MaintenanceBloc(cleanTempFiles: sl(), flushDns: sl(), restartServer: sl(), shutdownServer: sl(), logger: sl()));
 }

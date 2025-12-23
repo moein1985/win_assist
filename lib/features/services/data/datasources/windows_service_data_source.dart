@@ -25,6 +25,12 @@ abstract class WindowsServiceDataSource {
   // Sessions
   Future<List<WindowsSession>> getRemoteSessions();
   Future<void> killSession(int sessionId);
+
+  // Maintenance
+  Future<String> cleanTempFiles();
+  Future<String> flushDns();
+  Future<void> restartServer();
+  Future<void> shutdownServer();
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -275,6 +281,81 @@ if ($quser) {
     }
   }
 
+  // --- Maintenance ---
+  @override
+  Future<String> cleanTempFiles() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue; "Temp files cleaned."''';
+    logger.d('Executing cleanTempFiles command...');
+    try {
+      final output = await _execute(command);
+      logger.i('Clean temp files completed. Output: $output');
+      return output;
+    } catch (e) {
+      logger.e('Error cleaning temp files: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<String> flushDns() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Clear-DnsClientCache; "DNS Cache Flushed."''';
+    logger.d('Executing flushDns command...');
+    try {
+      final output = await _execute(command);
+      logger.i('Flush DNS completed. Output: $output');
+      return output;
+    } catch (e) {
+      logger.e('Error flushing DNS: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> restartServer() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Restart-Computer -Force''';
+    logger.d('Executing restartServer command...');
+    try {
+      await _execute(command);
+      logger.i('Restart command sent.');
+    } catch (e) {
+      logger.e('Error restarting server: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> shutdownServer() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Stop-Computer -Force''';
+    logger.d('Executing shutdownServer command...');
+    try {
+      await _execute(command);
+      logger.i('Shutdown command sent.');
+    } catch (e) {
+      logger.e('Error shutting down server: $e');
+      rethrow;
+    }
+  }
+
   Future<String> _execute(String command) async {
     logger.d('Executing command: $command');
     // PowerShell's -EncodedCommand expects a Base64-encoded string of a UTF-16LE command.
@@ -285,14 +366,45 @@ if ($quser) {
     }
     final base64Command = base64.encode(commandBytes);
 
-    final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
-    final output = await utf8.decodeStream(session.stdout);
-    final error = await utf8.decodeStream(session.stderr);
+    // Helper to execute a single time
+    Future<Map<String, String>> _runOnce() async {
+      final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
+      final out = await utf8.decodeStream(session.stdout);
+      final err = await utf8.decodeStream(session.stderr);
+      return {'out': out, 'err': err};
+    }
+
+    final result = await _runOnce();
+    var output = result['out'] ?? '';
+    var error = result['err'] ?? '';
 
     if (error.isNotEmpty) {
-      logger.e('PowerShell Error: $error');
-      throw Exception('PowerShell Error: $error');
+      // Detect benign module-loading/progress CLIXML messages which are not fatal
+      final lower = error.toLowerCase();
+      final isBenign = error.contains('Preparing modules for first use') || error.contains('<Objs') || error.startsWith('#< CLIXML') || lower.contains('preparing modules for first use');
+      if (isBenign) {
+        logger.w('PowerShell warning (ignored): $error');
+        // retry once after a short delay, hoping modules finish loading
+        await Future.delayed(const Duration(milliseconds: 300));
+        final retry = await _runOnce();
+        output = retry['out'] ?? '';
+        error = retry['err'] ?? '';
+        if (error.isNotEmpty) {
+          final lowered = error.toLowerCase();
+          final stillBenign = error.contains('Preparing modules for first use') || error.contains('<Objs') || error.startsWith('#< CLIXML') || lowered.contains('preparing modules for first use');
+          if (!stillBenign) {
+            logger.e('PowerShell Error (retry): $error');
+            throw Exception('PowerShell Error: $error');
+          } else {
+            logger.w('PowerShell warning on retry (ignored): $error');
+          }
+        }
+      } else {
+        logger.e('PowerShell Error: $error');
+        throw Exception('PowerShell Error: $error');
+      }
     }
+
     return output.trim();
   }
 

@@ -3,6 +3,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:win_assist/features/users/presentation/pages/users_page.dart';
 import 'package:win_assist/injection_container.dart' as di;
 import 'package:win_assist/features/users/presentation/bloc/users_bloc.dart';
+// Maintenance
+import 'package:win_assist/features/maintenance/presentation/bloc/maintenance_bloc.dart';
+import 'package:win_assist/features/maintenance/presentation/pages/maintenance_page.dart';
 
 class ToolsScreen extends StatelessWidget {
   const ToolsScreen({super.key});
@@ -23,6 +26,20 @@ class ToolsScreen extends StatelessWidget {
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<UsersBloc>(
                   create: (_) => di.sl<UsersBloc>()..add(GetUsersEvent()),
                   child: const UsersPage(),
+                )));
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              title: const Text('System Maintenance'),
+              subtitle: const Text('Cleanup and power operations'),
+              trailing: const Icon(Icons.build),
+              onTap: () {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<MaintenanceBloc>(
+                  create: (_) => di.sl<MaintenanceBloc>(),
+                  child: const MaintenancePage(),
                 )));
               },
             ),
