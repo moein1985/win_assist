@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import 'package:win_assist/injection_container.dart' as di;
@@ -39,6 +40,35 @@ class _ServicesPageState extends State<ServicesPage> {
     final newStatus = selected ? status : 'All';
     setState(() => _filterStatus = newStatus);
     logger.d('ServicesPage: filter changed -> "$_filterStatus" (selected: $selected)');
+  }
+
+  void _onDebugPressed(List<ServiceItem> allServices) async {
+    final total = allServices.length;
+    final runningCount = allServices.where((s) => s.status == ServiceStatus.running).length;
+    final stoppedCount = allServices.where((s) => s.status == ServiceStatus.stopped).length;
+    final unknownCount = total - runningCount - stoppedCount;
+
+    final sampleList = allServices.take(20).map((s) => '${s.name} => rawStatus="${s.rawStatus}" status="${s.status}"').toList();
+    final sample = sampleList.join('\n');
+
+    final body = 'Services debug report\nTotal: $total\nRunning: $runningCount\nStopped: $stoppedCount\nUnknown: $unknownCount\n\nSample:\n$sample';
+
+    logger.i('ServicesPage Debug:\n$body');
+
+    await Clipboard.setData(ClipboardData(text: body));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debug report copied to clipboard')));
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Services Debug Report'),
+        content: SingleChildScrollView(child: Text(body)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+          TextButton(onPressed: () { Clipboard.setData(ClipboardData(text: body)); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied'))); }, child: const Text('Copy')),
+        ],
+      ),
+    );
   }
 
   List<ServiceItem> _applyFiltersAndSort(List<ServiceItem> services) {
@@ -220,7 +250,15 @@ class _ServicesPageState extends State<ServicesPage> {
             if (services.isEmpty) {
               return Column(
                 children: [
-                  _buildSearchBar(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(child: _buildSearchBar()),
+                        IconButton(key: const Key('debug_button'), tooltip: 'Export Debug', icon: const Icon(Icons.bug_report), onPressed: () => _onDebugPressed(state.services)),
+                      ],
+                    ),
+                  ),
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildFilterChips()),
                   const Expanded(child: Center(child: Text('No services found.'))),
                 ],
@@ -231,7 +269,15 @@ class _ServicesPageState extends State<ServicesPage> {
               onRefresh: () async => context.read<ServicesBloc>().add(GetServicesEvent()),
               child: Column(
                 children: [
-                  _buildSearchBar(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(child: _buildSearchBar()),
+                        IconButton(key: const Key('debug_button'), tooltip: 'Export Debug', icon: const Icon(Icons.bug_report), onPressed: () => _onDebugPressed(state.services)),
+                      ],
+                    ),
+                  ),
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildFilterChips()),
                   Expanded(
                     child: ListView.builder(
