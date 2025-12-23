@@ -3,6 +3,7 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -10,6 +11,9 @@ abstract class WindowsServiceDataSource {
   Future<void> connect(String ip, int port, String username, String password);
   void disconnect();
   bool get isConnected;
+
+  // New: Update status of a service
+  Future<void> updateServiceStatus(String serviceName, ServiceAction action);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -95,6 +99,36 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       return jsonList.map((json) => ServiceItem.fromJson(json)).toList();
     } catch (e) {
       logger.e('Error getting services: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> updateServiceStatus(String serviceName, ServiceAction action) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    String command;
+    switch (action) {
+      case ServiceAction.start:
+        command = "Start-Service -Name '$serviceName'";
+        break;
+      case ServiceAction.stop:
+        command = "Stop-Service -Name '$serviceName' -Force";
+        break;
+      case ServiceAction.restart:
+        command = "Restart-Service -Name '$serviceName' -Force";
+        break;
+    }
+
+    logger.d('Executing service action command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Service action completed. Output: $output');
+    } catch (e) {
+      logger.e('Error updating service status: $e');
       rethrow;
     }
   }

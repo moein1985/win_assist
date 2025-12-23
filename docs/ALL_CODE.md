@@ -17,9 +17,11 @@
 - `lib/features/services/data/repositories/dashboard_repository_impl.dart`
 - `lib/features/services/domain/usecases/get_services.dart`
 - `lib/features/services/domain/usecases/get_dashboard_info.dart`
+- `lib/features/services/domain/usecases/update_service_status.dart`
 - `lib/features/services/domain/repositories/services_repository.dart`
 - `lib/features/services/domain/repositories/dashboard_repository.dart`
 - `lib/features/services/domain/entities/service_item.dart`
+- `lib/features/services/domain/entities/service_action.dart`
 - `lib/features/services/domain/entities/dashboard_info.dart`
 - `lib/features/services/presentation/bloc/services_bloc.dart`
 - `lib/features/services/presentation/bloc/dashboard_bloc.dart`
@@ -122,6 +124,7 @@ import 'package:win_assist/features/services/domain/repositories/dashboard_repos
 import 'package:win_assist/features/services/domain/repositories/services_repository.dart';
 import 'package:win_assist/features/services/domain/usecases/get_dashboard_info.dart';
 import 'package:win_assist/features/services/domain/usecases/get_services.dart';
+import 'package:win_assist/features/services/domain/usecases/update_service_status.dart';
 import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 
@@ -149,10 +152,11 @@ Future<void> init() async {
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
   sl.registerLazySingleton(() => GetServices(sl()));
+  sl.registerLazySingleton(() => UpdateServiceStatus(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
-  sl.registerFactory(() => ServicesBloc(getServices: sl(), logger: sl()));
+  sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
 }
 ```
 
@@ -337,6 +341,7 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -344,6 +349,9 @@ abstract class WindowsServiceDataSource {
   Future<void> connect(String ip, int port, String username, String password);
   void disconnect();
   bool get isConnected;
+
+  // New: Update status of a service
+  Future<void> updateServiceStatus(String serviceName, ServiceAction action);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -433,6 +441,36 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
     }
   }
 
+  @override
+  Future<void> updateServiceStatus(String serviceName, ServiceAction action) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    String command;
+    switch (action) {
+      case ServiceAction.start:
+        command = "Start-Service -Name '$serviceName'";
+        break;
+      case ServiceAction.stop:
+        command = "Stop-Service -Name '$serviceName' -Force";
+        break;
+      case ServiceAction.restart:
+        command = "Restart-Service -Name '$serviceName' -Force";
+        break;
+    }
+
+    logger.d('Executing service action command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Service action completed. Output: $output');
+    } catch (e) {
+      logger.e('Error updating service status: $e');
+      rethrow;
+    }
+  }
+
   Future<String> _execute(String command) async {
     logger.d('Executing command: $command');
     // PowerShell's -EncodedCommand expects a Base64-encoded string of a UTF-16LE command.
@@ -475,6 +513,7 @@ import 'package:logger/logger.dart';
 import 'package:win_assist/core/error/failure.dart';
 import 'package:win_assist/features/services/data/datasources/windows_service_data_source.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 import 'package:win_assist/features/services/domain/repositories/services_repository.dart';
 
 class ServicesRepositoryImpl implements ServicesRepository {
@@ -492,6 +531,19 @@ class ServicesRepositoryImpl implements ServicesRepository {
       return Right(result);
     } catch (e) {
       logger.e('Failed to get services: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, Unit>> updateServiceStatus(String serviceName, ServiceAction action) async {
+    try {
+      logger.d('Updating service "$serviceName" action: $action');
+      await dataSource.updateServiceStatus(serviceName, action);
+      logger.i('Service "$serviceName" updated successfully');
+      return Right(unit);
+    } catch (e) {
+      logger.e('Failed to update service: $e');
       return Left(ServerFailure(message: e.toString()));
     }
   }
@@ -556,6 +608,36 @@ class GetServices implements UseCase<List<ServiceItem>, NoParams> {
 
 ---
 
+## `lib/features/services/domain/usecases/update_service_status.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
+import 'package:win_assist/features/services/domain/repositories/services_repository.dart';
+
+class UpdateServiceParams {
+  final String serviceName;
+  final ServiceAction action;
+
+  UpdateServiceParams({required this.serviceName, required this.action});
+}
+
+class UpdateServiceStatus implements UseCase<Unit, UpdateServiceParams> {
+  final ServicesRepository repository;
+
+  UpdateServiceStatus(this.repository);
+
+  @override
+  Future<Either<Failure, Unit>> call(UpdateServiceParams params) async {
+    return await repository.updateServiceStatus(params.serviceName, params.action);
+  }
+}
+```
+
+---
+
 ## `lib/features/services/domain/usecases/get_dashboard_info.dart`
 
 ```dart
@@ -585,9 +667,11 @@ class GetDashboardInfo implements UseCase<DashboardInfo, NoParams> {
 import 'package:dartz/dartz.dart';
 import 'package:win_assist/core/error/failure.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
 abstract class ServicesRepository {
   Future<Either<Failure, List<ServiceItem>>> getServices();
+  Future<Either<Failure, Unit>> updateServiceStatus(String serviceName, ServiceAction action);
 }
 ```
 
@@ -644,6 +728,15 @@ class ServiceItem {
   }
 }
 ```
+
+---
+
+## `lib/features/services/domain/entities/service_action.dart`
+
+```dart
+enum ServiceAction { start, stop, restart }
+```
+
 
 ---
 
@@ -731,6 +824,8 @@ import 'package:logger/logger.dart';
 import 'package:win_assist/core/usecases/usecase.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/usecases/get_services.dart';
+import 'package:win_assist/features/services/domain/usecases/update_service_status.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
 abstract class ServicesEvent extends Equatable {
   const ServicesEvent();
@@ -740,6 +835,16 @@ abstract class ServicesEvent extends Equatable {
 }
 
 class GetServicesEvent extends ServicesEvent {}
+
+class UpdateServiceEvent extends ServicesEvent {
+  final String serviceName;
+  final ServiceAction action;
+
+  const UpdateServiceEvent({required this.serviceName, required this.action});
+
+  @override
+  List<Object> get props => [serviceName, action];
+}
 
 abstract class ServicesState extends Equatable {
   const ServicesState();
@@ -761,6 +866,24 @@ class ServicesLoaded extends ServicesState {
   List<Object> get props => [services];
 }
 
+class ServicesActionInProgress extends ServicesState {
+  final String serviceName;
+
+  const ServicesActionInProgress({required this.serviceName});
+
+  @override
+  List<Object> get props => [serviceName];
+}
+
+class ServicesActionSuccess extends ServicesState {
+  final String message;
+
+  const ServicesActionSuccess({required this.message});
+
+  @override
+  List<Object> get props => [message];
+}
+
 class ServicesError extends ServicesState {
   final String message;
 
@@ -772,12 +895,14 @@ class ServicesError extends ServicesState {
 
 class ServicesBloc extends Bloc<ServicesEvent, ServicesState> {
   final GetServices getServices;
+  final UpdateServiceStatus updateServiceStatus;
   final Logger logger;
 
-  ServicesBloc({required this.getServices, required Logger? logger})
+  ServicesBloc({required this.getServices, required this.updateServiceStatus, required Logger? logger})
       : logger = logger ?? Logger(),
         super(ServicesInitial()) {
     on<GetServicesEvent>(_onGetServices);
+    on<UpdateServiceEvent>(_onUpdateService);
   }
 
   Future<void> _onGetServices(
@@ -795,6 +920,27 @@ class ServicesBloc extends Bloc<ServicesEvent, ServicesState> {
       (services) {
         logger.i('ServicesBloc: Services loaded successfully: ${services.length} services');
         emit(ServicesLoaded(services: services));
+      },
+    );
+  }
+
+  Future<void> _onUpdateService(
+    UpdateServiceEvent event,
+    Emitter<ServicesState> emit,
+  ) async {
+    logger.d('ServicesBloc: Updating service ${event.serviceName} action: ${event.action}');
+    emit(ServicesActionInProgress(serviceName: event.serviceName));
+
+    final result = await updateServiceStatus(UpdateServiceParams(serviceName: event.serviceName, action: event.action));
+    result.fold(
+      (failure) {
+        logger.e('ServicesBloc: Error updating service: ${failure.message}');
+        emit(ServicesError(message: failure.message));
+      },
+      (_) {
+        logger.i('ServicesBloc: Service updated successfully');
+        emit(ServicesActionSuccess(message: 'Service ${event.serviceName} ${event.action.toString().split('.').last} successfully'));
+        add(GetServicesEvent());
       },
     );
   }
@@ -891,65 +1037,100 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
+import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
 class ServicesPage extends StatelessWidget {
   const ServicesPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<ServicesBloc, ServicesState>(
-      builder: (context, state) {
-        if (state is ServicesLoading) {
-          return const Center(child: CircularProgressIndicator());
+    return BlocListener<ServicesBloc, ServicesState>(
+      listener: (context, state) {
+        if (state is ServicesActionSuccess) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(state.message)));
         } else if (state is ServicesError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text('Error: ${state.message}'),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () => context.read<ServicesBloc>().add(GetServicesEvent()),
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
-          );
-        } else if (state is ServicesLoaded) {
-          final services = state.services;
-          if (services.isEmpty) {
-            return const Center(child: Text('No services found.'));
-          }
-          return RefreshIndicator(
-            onRefresh: () async => context.read<ServicesBloc>().add(GetServicesEvent()),
-            child: ListView.builder(
-              itemCount: services.length,
-              itemBuilder: (context, index) {
-                final service = services[index];
-                final statusColor = service.status == ServiceStatus.running ? Colors.green : Colors.red;
-                final statusText = service.status.toString().split('.').last;
-
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: ListTile(
-                    title: Text(service.displayName),
-                    subtitle: Text(service.name),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.circle, color: statusColor, size: 12),
-                        const SizedBox(width: 8),
-                        Text(statusText),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${state.message}')));
         }
-        return const Center(child: Text('Welcome to Services'));
       },
+      child: BlocBuilder<ServicesBloc, ServicesState>(
+        builder: (context, state) {
+          if (state is ServicesLoading) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (state is ServicesError && !(state is ServicesActionSuccess)) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('Error: ${state.message}'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => context.read<ServicesBloc>().add(GetServicesEvent()),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            );
+          } else if (state is ServicesLoaded) {
+            final services = state.services;
+            if (services.isEmpty) {
+              return const Center(child: Text('No services found.'));
+            }
+            return RefreshIndicator(
+              onRefresh: () async => context.read<ServicesBloc>().add(GetServicesEvent()),
+              child: ListView.builder(
+                itemCount: services.length,
+                itemBuilder: (context, index) {
+                  final service = services[index];
+                  final statusColor = service.status == ServiceStatus.running ? Colors.green : Colors.red;
+                  final statusText = service.status.toString().split('.').last;
+
+                  final isUpdating = state is ServicesActionInProgress && (state as ServicesActionInProgress).serviceName == service.name;
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: ListTile(
+                      title: Text(service.displayName),
+                      subtitle: Text(service.name),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.circle, color: statusColor, size: 12),
+                          const SizedBox(width: 8),
+                          Text(statusText),
+                          PopupMenuButton<ServiceAction>(
+                            onSelected: (action) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Performing ${action.toString().split('.').last} on ${service.displayName}...')));
+                              context.read<ServicesBloc>().add(UpdateServiceEvent(serviceName: service.name, action: action));
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem<ServiceAction>(
+                                value: ServiceAction.start,
+                                enabled: service.status != ServiceStatus.running && !isUpdating,
+                                child: const Text('Start'),
+                              ),
+                              PopupMenuItem<ServiceAction>(
+                                value: ServiceAction.stop,
+                                enabled: service.status != ServiceStatus.stopped && !isUpdating,
+                                child: const Text('Stop'),
+                              ),
+                              PopupMenuItem<ServiceAction>(
+                                value: ServiceAction.restart,
+                                enabled: !isUpdating,
+                                child: const Text('Restart'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          }
+          return const Center(child: Text('Welcome to Services'));
+        },
+      ),
     );
   }
 }

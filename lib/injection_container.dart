@@ -7,6 +7,7 @@ import 'package:win_assist/features/services/domain/repositories/dashboard_repos
 import 'package:win_assist/features/services/domain/repositories/services_repository.dart';
 import 'package:win_assist/features/services/domain/usecases/get_dashboard_info.dart';
 import 'package:win_assist/features/services/domain/usecases/get_services.dart';
+import 'package:win_assist/features/services/domain/usecases/update_service_status.dart';
 import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 
@@ -34,8 +35,9 @@ Future<void> init() async {
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
   sl.registerLazySingleton(() => GetServices(sl()));
+  sl.registerLazySingleton(() => UpdateServiceStatus(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
-  sl.registerFactory(() => ServicesBloc(getServices: sl(), logger: sl()));
+  sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
 }
