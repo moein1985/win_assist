@@ -34,6 +34,15 @@
 - `lib/models/server_info.dart`
 - `lib/screens/login_screen.dart`
 - `lib/screens/home_screen.dart`
+- `lib/screens/tools_screen.dart`
+- `lib/features/users/presentation/pages/users_page.dart`
+- `lib/features/users/presentation/bloc/users_bloc.dart`
+- `lib/features/users/data/repositories/users_repository_impl.dart`
+- `lib/features/users/domain/usecases/get_local_users.dart`
+- `lib/features/users/domain/usecases/toggle_user_status.dart`
+- `lib/features/users/domain/usecases/reset_user_password.dart`
+- `lib/features/users/domain/repositories/users_repository.dart`
+- `lib/features/users/domain/entities/windows_user.dart`
 - `lib/screens/dashboard_screen.dart`
 - `lib/screens/services_screen.dart`
 - `lib/widgets/ram_card.dart`
@@ -128,6 +137,14 @@ import 'package:win_assist/features/services/domain/usecases/update_service_stat
 import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 
+// Users feature
+import 'package:win_assist/features/users/data/repositories/users_repository_impl.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+import 'package:win_assist/features/users/domain/usecases/get_local_users.dart';
+import 'package:win_assist/features/users/domain/usecases/toggle_user_status.dart';
+import 'package:win_assist/features/users/domain/usecases/reset_user_password.dart';
+import 'package:win_assist/features/users/presentation/bloc/users_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -148,15 +165,24 @@ Future<void> init() async {
   sl.registerLazySingleton<ServicesRepository>(
     () => ServicesRepositoryImpl(dataSource: sl(), logger: sl()),
   );
+  // Users repository
+  sl.registerLazySingleton<UsersRepository>(
+    () => UsersRepositoryImpl(dataSource: sl(), logger: sl()),
+  );
 
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
   sl.registerLazySingleton(() => GetServices(sl()));
   sl.registerLazySingleton(() => UpdateServiceStatus(sl()));
+  // Users use cases
+  sl.registerLazySingleton(() => GetLocalUsers(sl()));
+  sl.registerLazySingleton(() => ToggleUserStatus(sl()));
+  sl.registerLazySingleton(() => ResetUserPassword(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
   sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
+  sl.registerFactory(() => UsersBloc(getLocalUsers: sl(), toggleUserStatus: sl(), resetUserPassword: sl(), logger: sl()));
 }
 ```
 
@@ -342,6 +368,7 @@ import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -350,8 +377,13 @@ abstract class WindowsServiceDataSource {
   void disconnect();
   bool get isConnected;
 
-  // New: Update status of a service
+  // Service management
   Future<void> updateServiceStatus(String serviceName, ServiceAction action);
+
+  // User management
+  Future<List<WindowsUser>> getLocalUsers();
+  Future<void> toggleUserStatus(String username, bool enable);
+  Future<void> resetUserPassword(String username, String newPassword);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -467,6 +499,76 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       logger.i('Service action completed. Output: $output');
     } catch (e) {
       logger.e('Error updating service status: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<WindowsUser>> getLocalUsers() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Get-LocalUser | Select-Object Name,Enabled,LastLogon,Description | ConvertTo-Json -Compress''';
+    logger.d('Executing getLocalUsers command...');
+    try {
+      final jsonString = await _execute(command);
+      if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for local users.');
+        throw Exception('Received empty response from server for local users.');
+      }
+
+      // Handle single object or list
+      if (jsonString.startsWith('{')) {
+        final Map<String, dynamic> jsonItem = jsonDecode(jsonString);
+        return [WindowsUser.fromJson(jsonItem)];
+      }
+
+      final List<dynamic> jsonList = jsonDecode(jsonString);
+      return jsonList.map((json) => WindowsUser.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      logger.e('Error getting local users: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> toggleUserStatus(String username, bool enable) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = enable
+        ? "Enable-LocalUser -Name '$username'"
+        : "Disable-LocalUser -Name '$username'";
+
+    logger.d('Executing toggleUserStatus command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Toggle user status completed. Output: $output');
+    } catch (e) {
+      logger.e('Error toggling user status: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> resetUserPassword(String username, String newPassword) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = '\$secPass = ConvertTo-SecureString "${newPassword.replaceAll('"', '\\"')}" -AsPlainText -Force; Set-LocalUser -Name "${username.replaceAll('"', '\\"')}" -Password \$secPass';
+
+    logger.d('Executing resetUserPassword command for $username');
+    try {
+      final output = await _execute(command);
+      logger.i('Reset password completed. Output: $output');
+    } catch (e) {
+      logger.e('Error resetting user password: $e');
       rethrow;
     }
   }
@@ -1689,6 +1791,7 @@ import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.da
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 import 'package:win_assist/features/services/presentation/pages/dashboard_page.dart';
 import 'package:win_assist/features/services/presentation/pages/services_page.dart';
+import 'package:win_assist/screens/tools_screen.dart';
 import 'package:win_assist/injection_container.dart' as di;
 
 class HomeScreen extends StatefulWidget {
@@ -1717,6 +1820,8 @@ class _HomeScreenState extends State<HomeScreen> {
         create: (context) => di.sl<ServicesBloc>()..add(GetServicesEvent()),
         child: const ServicesPage(),
       ),
+      // Tools tab (contains Local Users Manager)
+      const ToolsScreen(),
     ];
   }
 
@@ -1752,6 +1857,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.miscellaneous_services),
             label: 'Services',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.build_circle_outlined),
+            label: 'Tools',
           ),
         ],
         currentIndex: _selectedIndex,
@@ -2072,9 +2181,347 @@ class StorageCard extends StatelessWidget {
 
 ---
 
+## `lib/features/users/domain/entities/windows_user.dart`
 
-> نکته: فقط فایل‌های `.dart` و `pubspec.yaml` در این سند درج شدند. فایل‌های باینری، تصاویر، و فایل‌های بستر (Android/iOS/C++) وارد نشده‌اند.
+```dart
+class WindowsUser {
+  final String name;
+  final bool isEnabled;
+  final String? lastLogon;
+  final String? description;
+
+  WindowsUser({
+    required this.name,
+    required this.isEnabled,
+    this.lastLogon,
+    this.description,
+  });
+
+  factory WindowsUser.fromJson(Map<String, dynamic> json) {
+    return WindowsUser(
+      name: json['Name'] ?? 'N/A',
+      isEnabled: json['Enabled'] == true || json['Enabled'] == 'True',
+      lastLogon: json['LastLogon']?.toString(),
+      description: json['Description']?.toString(),
+    );
+  }
+}
+```
 
 ---
+
+## `lib/features/users/domain/repositories/users_repository.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+
+abstract class UsersRepository {
+  Future<Either<Failure, List<WindowsUser>>> getLocalUsers();
+  Future<Either<Failure, Unit>> toggleUserStatus(String username, bool enable);
+  Future<Either<Failure, Unit>> resetUserPassword(String username, String newPassword);
+}
+```
+
+---
+
+## `lib/features/users/domain/usecases/get_local_users.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+
+class GetLocalUsers implements UseCase<List<WindowsUser>, NoParams> {
+  final UsersRepository repository;
+
+  GetLocalUsers(this.repository);
+
+  @override
+  Future<Either<Failure, List<WindowsUser>>> call(NoParams params) async {
+    return await repository.getLocalUsers();
+  }
+}
+```
+
+---
+
+## `lib/features/users/domain/usecases/toggle_user_status.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+
+class ToggleUserStatusParams {
+  final String username;
+  final bool enable;
+
+  ToggleUserStatusParams({required this.username, required this.enable});
+}
+
+class ToggleUserStatus implements UseCase<Unit, ToggleUserStatusParams> {
+  final UsersRepository repository;
+
+  ToggleUserStatus(this.repository);
+
+  @override
+  Future<Either<Failure, Unit>> call(ToggleUserStatusParams params) async {
+    return await repository.toggleUserStatus(params.username, params.enable);
+  }
+}
+```
+
+---
+
+## `lib/features/users/domain/usecases/reset_user_password.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+
+class ResetUserPasswordParams {
+  final String username;
+  final String newPassword;
+
+  ResetUserPasswordParams({required this.username, required this.newPassword});
+}
+
+class ResetUserPassword implements UseCase<Unit, ResetUserPasswordParams> {
+  final UsersRepository repository;
+
+  ResetUserPassword(this.repository);
+
+  @override
+  Future<Either<Failure, Unit>> call(ResetUserPasswordParams params) async {
+    return await repository.resetUserPassword(params.username, params.newPassword);
+  }
+}
+```
+
+---
+
+## `lib/features/users/data/repositories/users_repository_impl.dart`
+
+```dart
+import 'package:dartz/dartz.dart';
+import 'package:logger/logger.dart';
+import 'package:win_assist/core/error/failure.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+import 'package:win_assist/features/services/data/datasources/windows_service_data_source.dart';
+
+class UsersRepositoryImpl implements UsersRepository {
+  final WindowsServiceDataSource dataSource;
+  final Logger logger;
+
+  UsersRepositoryImpl({required this.dataSource, required this.logger});
+
+  @override
+  Future<Either<Failure, List<WindowsUser>>> getLocalUsers() async {
+    try {
+      logger.d('Fetching local users from data source');
+      final result = await dataSource.getLocalUsers();
+      logger.i('Local users fetched successfully: ${result.length} users');
+      return Right(result);
+    } catch (e) {
+      logger.e('Failed to get local users: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, Unit>> toggleUserStatus(String username, bool enable) async {
+    try {
+      logger.d('Toggling user "$username" enable: $enable');
+      await dataSource.toggleUserStatus(username, enable);
+      logger.i('User "$username" toggled successfully');
+      return Right(unit);
+    } catch (e) {
+      logger.e('Failed to toggle user: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+
+  @override
+  Future<Either<Failure, Unit>> resetUserPassword(String username, String newPassword) async {
+    try {
+      logger.d('Resetting password for "$username"');
+      await dataSource.resetUserPassword(username, newPassword);
+      logger.i('Password reset successfully for "$username"');
+      return Right(unit);
+    } catch (e) {
+      logger.e('Failed to reset password: $e');
+      return Left(ServerFailure(message: e.toString()));
+    }
+  }
+}
+```
+
+---
+
+## `lib/features/users/presentation/bloc/users_bloc.dart`
+
+```dart
+import 'package:bloc/bloc.dart';
+import 'package:equatable/equatable.dart';
+import 'package:logger/logger.dart';
+import 'package:win_assist/core/usecases/usecase.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+import 'package:win_assist/features/users/domain/usecases/get_local_users.dart';
+import 'package:win_assist/features/users/domain/usecases/toggle_user_status.dart';
+import 'package:win_assist/features/users/domain/usecases/reset_user_password.dart';
+
+abstract class UsersEvent extends Equatable {
+  const UsersEvent();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class GetUsersEvent extends UsersEvent {}
+
+class ToggleUserStatusEvent extends UsersEvent {
+  final String username;
+  final bool enable;
+
+  const ToggleUserStatusEvent({required this.username, required this.enable});
+
+  @override
+  List<Object?> get props => [username, enable];
+}
+
+class ResetUserPasswordEvent extends UsersEvent {
+  final String username;
+  final String newPassword;
+
+  const ResetUserPasswordEvent({required this.username, required this.newPassword});
+
+  @override
+  List<Object?> get props => [username, newPassword];
+}
+
+abstract class UsersState extends Equatable {
+  const UsersState();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class UsersInitial extends UsersState {}
+
+class UsersLoading extends UsersState {}
+
+class UsersLoaded extends UsersState {
+  final List<WindowsUser> users;
+
+  const UsersLoaded({required this.users});
+
+  @override
+  List<Object?> get props => [users];
+}
+
+class UsersActionInProgress extends UsersState {
+  final String username;
+
+  const UsersActionInProgress({required this.username});
+
+  @override
+  List<Object?> get props => [username];
+}
+
+class UsersActionSuccess extends UsersState {
+  final String message;
+
+  const UsersActionSuccess({required this.message});
+
+  @override
+  List<Object?> get props => [message];
+}
+
+class UsersError extends UsersState {
+  final String message;
+
+  const UsersError({required this.message});
+
+  @override
+  List<Object?> get props => [message];
+}
+
+class UsersBloc extends Bloc<UsersEvent, UsersState> {
+  final GetLocalUsers getLocalUsers;
+  final ToggleUserStatus toggleUserStatus;
+  final ResetUserPassword resetUserPassword;
+  final Logger logger;
+
+  UsersBloc({
+    required this.getLocalUsers,
+    required this.toggleUserStatus,
+    required this.resetUserPassword,
+    required Logger? logger,
+  })  : logger = logger ?? Logger(),
+        super(UsersInitial()) {
+    on<GetUsersEvent>(_onGetUsers);
+    on<ToggleUserStatusEvent>(_onToggleUserStatus);
+    on<ResetUserPasswordEvent>(_onResetUserPassword);
+  }
+
+  Future<void> _onGetUsers(GetUsersEvent event, Emitter<UsersState> emit) async {
+    logger.d('UsersBloc: Fetching local users');
+    emit(UsersLoading());
+    final result = await getLocalUsers(NoParams());
+    result.fold(
+      (failure) {
+        logger.e('UsersBloc: Error fetching users: ${failure.message}');
+        emit(UsersError(message: failure.message));
+      },
+      (users) {
+        logger.i('UsersBloc: Users loaded: ${users.length}');
+        emit(UsersLoaded(users: users));
+      },
+    );
+  }
+
+  Future<void> _onToggleUserStatus(ToggleUserStatusEvent event, Emitter<UsersState> emit) async {
+    logger.d('UsersBloc: Toggling user ${event.username} -> ${event.enable}');
+    emit(UsersActionInProgress(username: event.username));
+    final result = await toggleUserStatus(ToggleUserStatusParams(username: event.username, enable: event.enable));
+    result.fold(
+      (failure) {
+        logger.e('UsersBloc: Error toggling user: ${failure.message}');
+        emit(UsersError(message: failure.message));
+      },
+      (_) {
+        logger.i('UsersBloc: Toggled user successfully');
+        emit(UsersActionSuccess(message: 'User ${event.username} ${event.enable ? 'enabled' : 'disabled'} successfully'));
+        add(GetUsersEvent());
+      },
+    );
+  }
+
+  Future<void> _onResetUserPassword(ResetUserPasswordEvent event, Emitter<UsersState> emit) async {
+    logger.d('UsersBloc: Resetting password for ${event.username}');
+    emit(UsersActionInProgress(username: event.username));
+    final result = await resetUserPassword(ResetUserPasswordParams(username: event.username, newPassword: event.newPassword));
+    result.fold(
+      (failure) {
+        logger.e('UsersBloc: Error resetting password: ${failure.message}');
+        emit(UsersError(message: failure.message));
+      },
+      (_) {
+        logger.i('UsersBloc: Password reset successfully');
+        emit(UsersActionSuccess(message: 'Password reset for ${event.username}'));
+        add(GetUsersEvent());
+      },
+    );
+  }
+}
+```
 
 

@@ -4,6 +4,7 @@ import 'package:logger/logger.dart';
 import 'package:win_assist/features/services/domain/entities/dashboard_info.dart';
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
+import 'package:win_assist/features/users/domain/entities/windows_user.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -12,8 +13,13 @@ abstract class WindowsServiceDataSource {
   void disconnect();
   bool get isConnected;
 
-  // New: Update status of a service
+  // Service management
   Future<void> updateServiceStatus(String serviceName, ServiceAction action);
+
+  // User management
+  Future<List<WindowsUser>> getLocalUsers();
+  Future<void> toggleUserStatus(String username, bool enable);
+  Future<void> resetUserPassword(String username, String newPassword);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -129,6 +135,76 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       logger.i('Service action completed. Output: $output');
     } catch (e) {
       logger.e('Error updating service status: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<WindowsUser>> getLocalUsers() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''Get-LocalUser | Select-Object Name,Enabled,LastLogon,Description | ConvertTo-Json -Compress''';
+    logger.d('Executing getLocalUsers command...');
+    try {
+      final jsonString = await _execute(command);
+      if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for local users.');
+        throw Exception('Received empty response from server for local users.');
+      }
+
+      // Handle single object or list
+      if (jsonString.startsWith('{')) {
+        final Map<String, dynamic> jsonItem = jsonDecode(jsonString);
+        return [WindowsUser.fromJson(jsonItem)];
+      }
+
+      final List<dynamic> jsonList = jsonDecode(jsonString);
+      return jsonList.map((json) => WindowsUser.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      logger.e('Error getting local users: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> toggleUserStatus(String username, bool enable) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = enable
+        ? "Enable-LocalUser -Name '$username'"
+        : "Disable-LocalUser -Name '$username'";
+
+    logger.d('Executing toggleUserStatus command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Toggle user status completed. Output: $output');
+    } catch (e) {
+      logger.e('Error toggling user status: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> resetUserPassword(String username, String newPassword) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = '\$secPass = ConvertTo-SecureString "${newPassword.replaceAll('"', '\\"')}" -AsPlainText -Force; Set-LocalUser -Name "${username.replaceAll('"', '\\"')}" -Password \$secPass';
+
+    logger.d('Executing resetUserPassword command for $username');
+    try {
+      final output = await _execute(command);
+      logger.i('Reset password completed. Output: $output');
+    } catch (e) {
+      logger.e('Error resetting user password: $e');
       rethrow;
     }
   }

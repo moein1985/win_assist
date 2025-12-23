@@ -5,6 +5,7 @@ import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.da
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 import 'package:win_assist/features/services/presentation/pages/dashboard_page.dart';
 import 'package:win_assist/features/services/presentation/pages/services_page.dart';
+import 'package:win_assist/screens/tools_screen.dart';
 import 'package:win_assist/injection_container.dart' as di;
 
 class HomeScreen extends StatefulWidget {
@@ -33,6 +34,8 @@ class _HomeScreenState extends State<HomeScreen> {
         create: (context) => di.sl<ServicesBloc>()..add(GetServicesEvent()),
         child: const ServicesPage(),
       ),
+      // Tools tab (contains Local Users Manager)
+      const ToolsScreen(),
     ];
   }
 
@@ -68,6 +71,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.miscellaneous_services),
             label: 'Services',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.build_circle_outlined),
+            label: 'Tools',
           ),
         ],
         currentIndex: _selectedIndex,

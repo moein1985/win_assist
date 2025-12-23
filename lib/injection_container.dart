@@ -11,6 +11,14 @@ import 'package:win_assist/features/services/domain/usecases/update_service_stat
 import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 
+// Users feature
+import 'package:win_assist/features/users/data/repositories/users_repository_impl.dart';
+import 'package:win_assist/features/users/domain/repositories/users_repository.dart';
+import 'package:win_assist/features/users/domain/usecases/get_local_users.dart';
+import 'package:win_assist/features/users/domain/usecases/toggle_user_status.dart';
+import 'package:win_assist/features/users/domain/usecases/reset_user_password.dart';
+import 'package:win_assist/features/users/presentation/bloc/users_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -31,13 +39,22 @@ Future<void> init() async {
   sl.registerLazySingleton<ServicesRepository>(
     () => ServicesRepositoryImpl(dataSource: sl(), logger: sl()),
   );
+  // Users repository
+  sl.registerLazySingleton<UsersRepository>(
+    () => UsersRepositoryImpl(dataSource: sl(), logger: sl()),
+  );
 
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
   sl.registerLazySingleton(() => GetServices(sl()));
   sl.registerLazySingleton(() => UpdateServiceStatus(sl()));
+  // Users use cases
+  sl.registerLazySingleton(() => GetLocalUsers(sl()));
+  sl.registerLazySingleton(() => ToggleUserStatus(sl()));
+  sl.registerLazySingleton(() => ResetUserPassword(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
   sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
+  sl.registerFactory(() => UsersBloc(getLocalUsers: sl(), toggleUserStatus: sl(), resetUserPassword: sl(), logger: sl()));
 }
