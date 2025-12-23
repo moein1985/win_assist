@@ -47,6 +47,13 @@
 - `lib/screens/services_screen.dart`
 - `lib/widgets/ram_card.dart`
 - `lib/widgets/storage_card.dart`
+- `lib/features/sessions/domain/entities/windows_session.dart`
+- `lib/features/sessions/domain/repositories/sessions_repository.dart`
+- `lib/features/sessions/domain/usecases/get_remote_sessions.dart`
+- `lib/features/sessions/domain/usecases/kill_session.dart`
+- `lib/features/sessions/data/repositories/sessions_repository_impl.dart`
+- `lib/features/sessions/presentation/bloc/sessions_bloc.dart`
+- `lib/features/sessions/presentation/pages/sessions_page.dart`
 
 ---
 
@@ -145,6 +152,13 @@ import 'package:win_assist/features/users/domain/usecases/toggle_user_status.dar
 import 'package:win_assist/features/users/domain/usecases/reset_user_password.dart';
 import 'package:win_assist/features/users/presentation/bloc/users_bloc.dart';
 
+// Sessions feature
+import 'package:win_assist/features/sessions/data/repositories/sessions_repository_impl.dart';
+import 'package:win_assist/features/sessions/domain/repositories/sessions_repository.dart';
+import 'package:win_assist/features/sessions/domain/usecases/get_remote_sessions.dart';
+import 'package:win_assist/features/sessions/domain/usecases/kill_session.dart';
+import 'package:win_assist/features/sessions/presentation/bloc/sessions_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -169,6 +183,10 @@ Future<void> init() async {
   sl.registerLazySingleton<UsersRepository>(
     () => UsersRepositoryImpl(dataSource: sl(), logger: sl()),
   );
+  // Sessions repository
+  sl.registerLazySingleton<SessionsRepository>(
+    () => SessionsRepositoryImpl(dataSource: sl(), logger: sl()),
+  );
 
   // Use cases
   sl.registerLazySingleton(() => GetDashboardInfo(sl()));
@@ -178,6 +196,9 @@ Future<void> init() async {
   sl.registerLazySingleton(() => GetLocalUsers(sl()));
   sl.registerLazySingleton(() => ToggleUserStatus(sl()));
   sl.registerLazySingleton(() => ResetUserPassword(sl()));
+  // Sessions use cases
+  sl.registerLazySingleton(() => GetRemoteSessions(sl()));
+  sl.registerLazySingleton(() => KillSession(sl()));
 
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
@@ -369,6 +390,7 @@ import 'package:win_assist/features/services/domain/entities/dashboard_info.dart
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
 import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+import 'package:win_assist/features/sessions/domain/entities/windows_session.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -384,6 +406,10 @@ abstract class WindowsServiceDataSource {
   Future<List<WindowsUser>> getLocalUsers();
   Future<void> toggleUserStatus(String username, bool enable);
   Future<void> resetUserPassword(String username, String newPassword);
+
+  // Sessions
+  Future<List<WindowsSession>> getRemoteSessions();
+  Future<void> killSession(int sessionId);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {

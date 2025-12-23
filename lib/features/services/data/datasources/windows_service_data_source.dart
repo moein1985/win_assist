@@ -5,6 +5,7 @@ import 'package:win_assist/features/services/domain/entities/dashboard_info.dart
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
 import 'package:win_assist/features/users/domain/entities/windows_user.dart';
+import 'package:win_assist/features/sessions/domain/entities/windows_session.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -20,6 +21,10 @@ abstract class WindowsServiceDataSource {
   Future<List<WindowsUser>> getLocalUsers();
   Future<void> toggleUserStatus(String username, bool enable);
   Future<void> resetUserPassword(String username, String newPassword);
+
+  // Sessions
+  Future<List<WindowsSession>> getRemoteSessions();
+  Future<void> killSession(int sessionId);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -205,6 +210,67 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       logger.i('Reset password completed. Output: $output');
     } catch (e) {
       logger.e('Error resetting user password: $e');
+      rethrow;
+    }
+  }
+
+  // --- Sessions related methods ---
+  @override
+  Future<List<WindowsSession>> getRemoteSessions() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''
+$quser = quser 2>&1 | Select-Object -Skip 1
+if ($quser) {
+    $quser | ForEach-Object {
+        if ($_ -match '^\s*([^\s]+)\s+(\d+)\s+([^\s]+)') {
+            @{ Username = $Matches[1]; Id = [int]$Matches[2]; State = $Matches[3]; }
+        } elseif ($_ -match '^\s*>([^\s]+)\s+([^\s]+)\s+(\d+)\s+([^\s]+)') {
+            @{ Username = $Matches[1]; Id = [int]$Matches[3]; State = $Matches[4]; }
+        }
+    } | ConvertTo-Json -Compress
+} else { "[]" }
+''';
+
+    logger.d('Executing getRemoteSessions command...');
+    try {
+      final jsonString = await _execute(command);
+      if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for remote sessions.');
+        throw Exception('Received empty response from server for remote sessions.');
+      }
+
+      // Handle single object or list
+      if (jsonString.startsWith('{')) {
+        final Map<String, dynamic> jsonItem = jsonDecode(jsonString);
+        return [WindowsSession.fromJson(jsonItem)];
+      }
+
+      final List<dynamic> jsonList = jsonDecode(jsonString);
+      return jsonList.map((json) => WindowsSession.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      logger.e('Error getting remote sessions: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = 'rwinsta $sessionId'; // or 'logoff $sessionId'
+    logger.d('Executing killSession command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Kill session completed. Output: $output');
+    } catch (e) {
+      logger.e('Error killing session: $e');
       rethrow;
     }
   }
