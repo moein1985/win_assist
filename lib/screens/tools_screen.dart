@@ -6,6 +6,10 @@ import 'package:win_assist/features/users/presentation/bloc/users_bloc.dart';
 // Maintenance
 import 'package:win_assist/features/maintenance/presentation/bloc/maintenance_bloc.dart';
 import 'package:win_assist/features/maintenance/presentation/pages/maintenance_page.dart';
+// Logs
+import 'package:win_assist/features/logs/presentation/bloc/logs_bloc.dart';
+import 'package:win_assist/features/logs/presentation/bloc/logs_event.dart';
+import 'package:win_assist/features/logs/presentation/pages/logs_page.dart';
 
 class ToolsScreen extends StatelessWidget {
   const ToolsScreen({super.key});
@@ -40,6 +44,20 @@ class ToolsScreen extends StatelessWidget {
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<MaintenanceBloc>(
                   create: (_) => di.sl<MaintenanceBloc>(),
                   child: const MaintenancePage(),
+                )));
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              title: const Text('System Event Logs'),
+              subtitle: const Text('View recent system errors and warnings'),
+              trailing: const Icon(Icons.history),
+              onTap: () {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<LogsBloc>(
+                  create: (_) => di.sl<LogsBloc>()..add(GetLogsEvent()),
+                  child: const LogsPage(),
                 )));
               },
             ),

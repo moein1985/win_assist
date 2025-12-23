@@ -6,6 +6,7 @@ import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
 import 'package:win_assist/features/users/domain/entities/windows_user.dart';
 import 'package:win_assist/features/sessions/domain/entities/windows_session.dart';
+import 'package:win_assist/features/logs/domain/entities/log_entry.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -25,6 +26,9 @@ abstract class WindowsServiceDataSource {
   // Sessions
   Future<List<WindowsSession>> getRemoteSessions();
   Future<void> killSession(int sessionId);
+
+  // Logs
+  Future<List<LogEntry>> getSystemLogs();
 
   // Maintenance
   Future<String> cleanTempFiles();
@@ -176,6 +180,36 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       return jsonList.map((json) => WindowsUser.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       logger.e('Error getting local users: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<LogEntry>> getSystemLogs() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''$ProgressPreference = 'SilentlyContinue'; Get-EventLog -LogName System -Newest 30 -EntryType Error,Warning | Select-Object Index, EntryType, Source, Message, TimeGenerated | ConvertTo-Json -Compress''';
+    logger.d('Executing getSystemLogs command...');
+    try {
+      final jsonString = await _execute(command);
+      if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for system logs.');
+        throw Exception('Received empty response from server for system logs.');
+      }
+
+      // Handle single object or list
+      if (jsonString.startsWith('{')) {
+        final Map<String, dynamic> jsonItem = jsonDecode(jsonString);
+        return [LogEntry.fromJson(jsonItem)];
+      }
+
+      final List<dynamic> jsonList = jsonDecode(jsonString);
+      return jsonList.map((json) => LogEntry.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      logger.e('Error getting system logs: $e');
       rethrow;
     }
   }
@@ -367,14 +401,14 @@ if ($quser) {
     final base64Command = base64.encode(commandBytes);
 
     // Helper to execute a single time
-    Future<Map<String, String>> _runOnce() async {
+    Future<Map<String, String>> runOnce() async {
       final session = await _client!.execute('powershell -NoProfile -EncodedCommand $base64Command');
       final out = await utf8.decodeStream(session.stdout);
       final err = await utf8.decodeStream(session.stderr);
       return {'out': out, 'err': err};
     }
 
-    final result = await _runOnce();
+    final result = await runOnce();
     var output = result['out'] ?? '';
     var error = result['err'] ?? '';
 
@@ -386,7 +420,7 @@ if ($quser) {
         logger.w('PowerShell warning (ignored): $error');
         // retry once after a short delay, hoping modules finish loading
         await Future.delayed(const Duration(milliseconds: 300));
-        final retry = await _runOnce();
+        final retry = await runOnce();
         output = retry['out'] ?? '';
         error = retry['err'] ?? '';
         if (error.isNotEmpty) {

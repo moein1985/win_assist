@@ -1,11 +1,190 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:logger/logger.dart';
+import 'package:win_assist/injection_container.dart' as di;
 import 'package:win_assist/features/services/domain/entities/service_item.dart';
 import 'package:win_assist/features/services/presentation/bloc/services_bloc.dart';
 import 'package:win_assist/features/services/domain/entities/service_action.dart';
 
-class ServicesPage extends StatelessWidget {
+class ServicesPage extends StatefulWidget {
   const ServicesPage({super.key});
+
+  @override
+  State<ServicesPage> createState() => _ServicesPageState();
+}
+
+class _ServicesPageState extends State<ServicesPage> {
+  String _searchQuery = '';
+  String _filterStatus = 'All'; // 'All', 'Running', 'Stopped'
+  late final Logger logger;
+
+  @override
+  void initState() {
+    super.initState();
+    // Use DI-provided logger when available
+    try {
+      logger = di.sl<Logger>();
+    } catch (_) {
+      logger = Logger();
+    }
+  }
+
+  void _onSearchChanged(String v) {
+    setState(() => _searchQuery = v.trim());
+    logger.d('ServicesPage: search changed -> "$_searchQuery"');
+  }
+
+  void _onFilterChanged(String status, bool selected) {
+    // Toggle: deselecting chip will return to 'All'
+    final newStatus = selected ? status : 'All';
+    setState(() => _filterStatus = newStatus);
+    logger.d('ServicesPage: filter changed -> "$_filterStatus" (selected: $selected)');
+  }
+
+  List<ServiceItem> _applyFiltersAndSort(List<ServiceItem> services) {
+    final q = _searchQuery.toLowerCase();
+
+    // Filter by search
+    var filtered = services.where((s) {
+      if (q.isEmpty) return true;
+      return s.name.toLowerCase().contains(q) || s.displayName.toLowerCase().contains(q);
+    }).toList();
+
+    // Filter by status
+    if (_filterStatus == 'Running') {
+      filtered = filtered.where((s) => s.status == ServiceStatus.running).toList();
+    } else if (_filterStatus == 'Stopped') {
+      filtered = filtered.where((s) => s.status == ServiceStatus.stopped).toList();
+    }
+
+    // Smart sort: running first, then unknown, then stopped. Within groups, sort by displayName.
+    filtered.sort((a, b) {
+      int score(ServiceStatus s) {
+        switch (s) {
+          case ServiceStatus.running:
+            return 0;
+          case ServiceStatus.unknown:
+            return 1;
+          case ServiceStatus.stopped:
+            return 2;
+        }
+      }
+
+      final sa = score(a.status);
+      final sb = score(b.status);
+      if (sa != sb) return sa.compareTo(sb);
+      return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+    });
+
+    return filtered;
+  }
+
+  Widget _buildFilterChips() {
+    const options = ['All', 'Running', 'Stopped'];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: options.map((o) {
+          final selected = _filterStatus == o;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: ChoiceChip(
+              key: Key('filter_chip_$o'),
+              label: Text(o),
+              selected: selected,
+              onSelected: (selected) => _onFilterChanged(o, selected),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: TextField(
+        key: const Key('services_search_field'),
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          hintText: 'Search by Name or Display Name',
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
+          isDense: true,
+        ),
+        onChanged: _onSearchChanged,
+      ),
+    );
+  }
+
+  Widget _buildServiceCard(BuildContext context, ServiceItem service, bool isUpdating) {
+    Color iconColor;
+    IconData iconData;
+    switch (service.status) {
+      case ServiceStatus.running:
+        iconColor = Colors.green;
+        iconData = Icons.play_circle;
+        break;
+      case ServiceStatus.stopped:
+        iconColor = Colors.red;
+        iconData = Icons.stop_circle;
+        break;
+      default:
+        iconColor = Colors.orange;
+        iconData = Icons.help_outline;
+    }
+
+    return Card(
+      key: Key('service_card_${service.name}'),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(iconData, color: iconColor, size: 36),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(service.displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(service.name, style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // small popup menu
+            PopupMenuButton<ServiceAction>(
+              onSelected: (action) {
+                logger.i('Service Action: ${action.toString().split('.').last} on ${service.name}');
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Performing ${action.toString().split('.').last} on ${service.displayName}...')));
+                context.read<ServicesBloc>().add(UpdateServiceEvent(serviceName: service.name, action: action));
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem<ServiceAction>(
+                  value: ServiceAction.start,
+                  enabled: service.status != ServiceStatus.running && !isUpdating,
+                  child: const Text('Start'),
+                ),
+                PopupMenuItem<ServiceAction>(
+                  value: ServiceAction.stop,
+                  enabled: service.status != ServiceStatus.stopped && !isUpdating,
+                  child: const Text('Stop'),
+                ),
+                PopupMenuItem<ServiceAction>(
+                  value: ServiceAction.restart,
+                  enabled: !isUpdating,
+                  child: const Text('Restart'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +200,7 @@ class ServicesPage extends StatelessWidget {
         builder: (context, state) {
           if (state is ServicesLoading) {
             return const Center(child: CircularProgressIndicator());
-          } else if (state is ServicesError && !(state is ServicesActionSuccess)) {
+          } else if (state is ServicesError && state is! ServicesActionSuccess) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -36,64 +215,47 @@ class ServicesPage extends StatelessWidget {
               ),
             );
           } else if (state is ServicesLoaded) {
-            final services = state.services;
+            final services = _applyFiltersAndSort(state.services);
+            logger.d('ServicesPage: applied filters "$_filterStatus" search="$_searchQuery" -> ${services.length}/${state.services.length}');
             if (services.isEmpty) {
-              return const Center(child: Text('No services found.'));
+              return Column(
+                children: [
+                  _buildSearchBar(),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildFilterChips()),
+                  const Expanded(child: Center(child: Text('No services found.'))),
+                ],
+              );
             }
+
             return RefreshIndicator(
               onRefresh: () async => context.read<ServicesBloc>().add(GetServicesEvent()),
-              child: ListView.builder(
-                itemCount: services.length,
-                itemBuilder: (context, index) {
-                  final service = services[index];
-                  final statusColor = service.status == ServiceStatus.running ? Colors.green : Colors.red;
-                  final statusText = service.status.toString().split('.').last;
-
-                  final isUpdating = state is ServicesActionInProgress && (state as ServicesActionInProgress).serviceName == service.name;
-
-                  return Card(
-                    margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: ListTile(
-                      title: Text(service.displayName),
-                      subtitle: Text(service.name),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.circle, color: statusColor, size: 12),
-                          const SizedBox(width: 8),
-                          Text(statusText),
-                          PopupMenuButton<ServiceAction>(
-                            onSelected: (action) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Performing ${action.toString().split('.').last} on ${service.displayName}...')));
-                              context.read<ServicesBloc>().add(UpdateServiceEvent(serviceName: service.name, action: action));
-                            },
-                            itemBuilder: (context) => [
-                              PopupMenuItem<ServiceAction>(
-                                value: ServiceAction.start,
-                                enabled: service.status != ServiceStatus.running && !isUpdating,
-                                child: const Text('Start'),
-                              ),
-                              PopupMenuItem<ServiceAction>(
-                                value: ServiceAction.stop,
-                                enabled: service.status != ServiceStatus.stopped && !isUpdating,
-                                child: const Text('Stop'),
-                              ),
-                              PopupMenuItem<ServiceAction>(
-                                value: ServiceAction.restart,
-                                enabled: !isUpdating,
-                                child: const Text('Restart'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+              child: Column(
+                children: [
+                  _buildSearchBar(),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildFilterChips()),
+                  Expanded(
+                    child: ListView.builder(
+                      key: const Key('services_list_view'),
+                      padding: const EdgeInsets.only(top: 8, bottom: 12),
+                      itemCount: services.length,
+                      itemBuilder: (context, index) {
+                        final service = services[index];
+                        final isUpdating = state is ServicesActionInProgress && (state as ServicesActionInProgress).serviceName == service.name;
+                        return _buildServiceCard(context, service, isUpdating);
+                      },
                     ),
-                  );
-                },
+                  ),
+                ],
               ),
             );
           }
-          return const Center(child: Text('Welcome to Services'));
+          return Column(
+            children: [
+              _buildSearchBar(),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildFilterChips()),
+              const Expanded(child: Center(child: Text('Welcome to Services'))),
+            ],
+          );
         },
       ),
     );
