@@ -12,7 +12,8 @@ void main() {
 
     final t = ScheduledTask.fromJson(json);
     expect(t.name, '12345');
-    expect(t.state, 'Ready');
+    expect(t.state, TaskState.ready);
+    expect(t.stateLabel, 'Ready');
     expect(t.lastRunTime, DateTime.fromMillisecondsSinceEpoch(1703465696000));
     expect(t.lastTaskResult, 0);
   });

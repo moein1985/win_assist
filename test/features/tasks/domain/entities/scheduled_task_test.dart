@@ -12,7 +12,8 @@ void main() {
 
     final t = ScheduledTask.fromJson(json);
     expect(t.name, 'MyTask');
-    expect(t.state, 'Ready');
+    expect(t.state, TaskState.ready);
+    expect(t.stateLabel, 'Ready');
     expect(t.lastRunTime, DateTime.parse('2025-12-24T12:34:56'));
     expect(t.lastTaskResult, 0);
   });

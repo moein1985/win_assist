@@ -39,40 +39,56 @@ class TasksBloc extends Bloc<TasksEvent, TasksState> {
   Future<void> _onRunTask(RunTaskEvent event, Emitter<TasksState> emit) async {
     logger.d('TasksBloc: Running task ${event.taskName}');
     emit(TasksActionInProgress());
+
     final result = await runTask(event.taskName);
+
+    // Handle failure synchronously so we don't leave async work running after the handler completes
     result.fold(
       (failure) {
         logger.e('TasksBloc: Error running task: ${failure.message}');
         emit(TasksError(failure.message));
       },
-      (_) async {
-        // Refresh list
-        final refreshed = await getTasks(NoParams());
-        refreshed.fold(
-          (f) => emit(TasksError(f.message)),
-          (tasks) => emit(TasksLoaded(tasks: tasks)),
-        );
-      },
+      (_) => null,
     );
+
+    // If success, refresh list (awaited sequentially)
+    if (result.isRight()) {
+      final refreshed = await getTasks(NoParams());
+      refreshed.fold(
+        (f) {
+          logger.e('TasksBloc: Error refreshing tasks after run: ${f.message}');
+          emit(TasksError(f.message));
+        },
+        (tasks) => emit(TasksLoaded(tasks: tasks)),
+      );
+    }
   }
 
   Future<void> _onStopTask(StopTaskEvent event, Emitter<TasksState> emit) async {
     logger.d('TasksBloc: Stopping task ${event.taskName}');
     emit(TasksActionInProgress());
+
     final result = await stopTask(event.taskName);
+
+    // Handle failure synchronously so we don't leave async work running after the handler completes
     result.fold(
       (failure) {
         logger.e('TasksBloc: Error stopping task: ${failure.message}');
         emit(TasksError(failure.message));
       },
-      (_) async {
-        // Refresh list
-        final refreshed = await getTasks(NoParams());
-        refreshed.fold(
-          (f) => emit(TasksError(f.message)),
-          (tasks) => emit(TasksLoaded(tasks: tasks)),
-        );
-      },
+      (_) => null,
     );
+
+    // If success, refresh list (awaited sequentially)
+    if (result.isRight()) {
+      final refreshed = await getTasks(NoParams());
+      refreshed.fold(
+        (f) {
+          logger.e('TasksBloc: Error refreshing tasks after stop: ${f.message}');
+          emit(TasksError(f.message));
+        },
+        (tasks) => emit(TasksLoaded(tasks: tasks)),
+      );
+    }
   }
 }
