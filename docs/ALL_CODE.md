@@ -63,8 +63,64 @@
 - `lib/features/maintenance/presentation/bloc/maintenance_bloc.dart`
 - `lib/features/maintenance/presentation/pages/maintenance_page.dart`
 
+- `lib/features/logs/domain/entities/log_entry.dart`
+- `lib/features/logs/domain/repositories/logs_repository.dart`
+- `lib/features/logs/domain/usecases/get_system_logs.dart`
+- `lib/features/logs/data/repositories/logs_repository_impl.dart`
+- `lib/features/logs/presentation/bloc/logs_event.dart`
+- `lib/features/logs/presentation/bloc/logs_state.dart`
+- `lib/features/logs/presentation/bloc/logs_bloc.dart`
+- `lib/features/logs/presentation/pages/logs_page.dart`
+
 ---
 
+## Feature: System Event Logs (New)
+
+- Purpose: Allow administrators to view recent **System** event log entries (Errors & Warnings) to troubleshoot service crashes and system issues.
+
+- Files added:
+  - `lib/features/logs/domain/entities/log_entry.dart` (entity with fields: index, entryType, source, message, timeGenerated, with robust fromJson handling)
+  - `lib/features/logs/domain/repositories/logs_repository.dart` (abstract repository)
+  - `lib/features/logs/domain/usecases/get_system_logs.dart` (usecase)
+  - `lib/features/logs/data/repositories/logs_repository_impl.dart` (repository impl; uses `WindowsServiceDataSource`)
+  - `lib/features/logs/presentation/bloc/logs_event.dart`, `logs_state.dart`, `logs_bloc.dart` (Bloc implementation)
+  - `lib/features/logs/presentation/pages/logs_page.dart` (UI: ListView with color-coded cards, details dialog)
+
+- PowerShell command used by `WindowsServiceDataSource.getSystemLogs()`:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue';
+Get-EventLog -LogName System -Newest 30 -EntryType Error,Warning |
+  Select-Object Index, EntryType, Source, Message, TimeGenerated |
+  ConvertTo-Json -Compress
+```
+
+- Parsing notes:
+  - `EntryType` can be numeric or string (1=Error, 2=Warning) or textual; `LogEntry.fromJson` now handles both numeric and string forms.
+  - `ServiceItem.fromJson` was hardened to preserve `rawStatus` and interpret numeric `ServiceControllerStatus` codes (e.g., 4=Running, 1=Stopped, 7=Paused, 0 sometimes used for stopped).
+
+- UI improvements (Services):
+  - `ServicesPage` enhanced with Search bar, Filter chips (All/Running/Stopped), Smart sorting (running first), and a **Debug/Export** button that copies a short report (counts + rawStatus samples) to the clipboard for diagnostics.
+  - Keys were added to important widgets for testing: `services_search_field`, `filter_chip_<name>`, `service_card_<service.name>`, `services_list_view`, `debug_button`.
+
+- Login screen:
+  - `LoginScreen` now exposes an **SSH Port** field (`_portController`) with a default value of `22`. The login flow validates the port (1-65535) and uses the parsed port when establishing the SSH connection (fixes connection timeouts to servers running SSH on non-standard ports, e.g., `2223`).
+
+  - Run logs (excerpt showing port support):
+
+    ```text
+    💡 Attempting to connect to server: 192.168.85.10:2223
+    💡 Connecting to 192.168.85.10:2223...
+    💡 SSH connection successful.
+    💡 Connection successful, navigating to home screen
+    💡 Services fetched successfully: 247 services
+    ```
+
+- Tests added:
+  - `test/features/logs/domain/entities/log_entry_test.dart`
+  - `test/features/logs/domain/usecases/get_system_logs_test.dart`
+  - `test/features/logs/presentation/bloc/logs_bloc_test.dart`
+  - `test/features/services/domain/entities/service_item_test.dart` (updated to validate numeric status mapping and rawStatus preservation)
 
 ---
 
@@ -96,6 +152,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  mocktail: ^0.3.0
+  bloc_test: ^9.1.0
 
 flutter:
   uses-material-design: true
@@ -1747,6 +1805,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _ipController = TextEditingController(text: '192.168.85.97');
   final _userController = TextEditingController();
   final _passController = TextEditingController();
+  final _portController = TextEditingController(text: '22');
   final Logger logger = di.sl<Logger>();
 
   bool _isLoading = false;
@@ -1764,10 +1823,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final dataSource = di.sl<WindowsServiceDataSource>();
     try {
-      logger.i('Attempting to connect to server: ${_ipController.text}');
+      final port = int.tryParse(_portController.text) ?? 22;
+      if (port < 1 || port > 65535) throw Exception('Invalid port number');
+
+      logger.i('Attempting to connect to server: ${_ipController.text}:$port');
       await dataSource.connect(
         _ipController.text,
-        22,
+        port,
         _userController.text,
         _passController.text,
       );
@@ -1797,6 +1859,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _ipController.dispose();
     _userController.dispose();
     _passController.dispose();
+    _portController.dispose();
     super.dispose();
   }
 
@@ -1820,11 +1883,31 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: const InputDecoration(labelText: 'Server IP'),
                   validator: (value) => value!.isEmpty ? 'Please enter an IP address' : null,
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _userController,
-                  decoration: const InputDecoration(labelText: 'Username'),
-                  validator: (value) => value!.isEmpty ? 'Please enter a username' : null,
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _portController,
+                        decoration: const InputDecoration(labelText: 'SSH Port'),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) return 'Please enter a port';
+                          final p = int.tryParse(value);
+                          if (p == null || p < 1 || p > 65535) return 'Enter a valid port (1-65535)';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _userController,
+                        decoration: const InputDecoration(labelText: 'Username'),
+                        validator: (value) => value!.isEmpty ? 'Please enter a username' : null,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
                 TextFormField(

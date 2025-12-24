@@ -16,6 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _ipController = TextEditingController(text: '192.168.85.97');
   final _userController = TextEditingController();
   final _passController = TextEditingController();
+  final _portController = TextEditingController(text: '22');
   final Logger logger = di.sl<Logger>();
 
   bool _isLoading = false;
@@ -33,10 +34,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final dataSource = di.sl<WindowsServiceDataSource>();
     try {
-      logger.i('Attempting to connect to server: ${_ipController.text}');
+      final port = int.tryParse(_portController.text) ?? 22;
+      if (port < 1 || port > 65535) throw Exception('Invalid port number');
+
+      logger.i('Attempting to connect to server: ${_ipController.text}:$port');
       await dataSource.connect(
         _ipController.text,
-        22,
+        port,
         _userController.text,
         _passController.text,
       );
@@ -66,6 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _ipController.dispose();
     _userController.dispose();
     _passController.dispose();
+    _portController.dispose();
     super.dispose();
   }
 
@@ -89,11 +94,31 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: const InputDecoration(labelText: 'Server IP'),
                   validator: (value) => value!.isEmpty ? 'Please enter an IP address' : null,
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _userController,
-                  decoration: const InputDecoration(labelText: 'Username'),
-                  validator: (value) => value!.isEmpty ? 'Please enter a username' : null,
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _portController,
+                        decoration: const InputDecoration(labelText: 'SSH Port'),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) return 'Please enter a port';
+                          final p = int.tryParse(value);
+                          if (p == null || p < 1 || p > 65535) return 'Enter a valid port (1-65535)';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _userController,
+                        decoration: const InputDecoration(labelText: 'Username'),
+                        validator: (value) => value!.isEmpty ? 'Please enter a username' : null,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
