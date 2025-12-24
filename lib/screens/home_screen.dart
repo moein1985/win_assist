@@ -21,15 +21,16 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
 
   late final List<Widget> _pages;
+  late final DashboardBloc _dashboardBloc;
 
   @override
   void initState() {
     super.initState();
+    // create single DashboardBloc instance made available to all tabs (Dashboard & Tools)
+    _dashboardBloc = di.sl<DashboardBloc>()..add(GetDashboardInfoEvent());
+
     _pages = [
-      BlocProvider<DashboardBloc>(
-        create: (context) => di.sl<DashboardBloc>()..add(GetDashboardInfoEvent()),
-        child: const DashboardPage(),
-      ),
+      const DashboardPage(),
       BlocProvider<ServicesBloc>(
         create: (context) => di.sl<ServicesBloc>()..add(GetServicesEvent()),
         child: const ServicesPage(),
@@ -48,37 +49,42 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     widget.dataSource.disconnect();
+    // close the dashboard bloc we created
+    _dashboardBloc.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Win Assist'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _pages,
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.miscellaneous_services),
-            label: 'Services',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.build_circle_outlined),
-            label: 'Tools',
-          ),
-        ],
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
+    return BlocProvider<DashboardBloc>.value(
+      value: _dashboardBloc,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Win Assist'),
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        ),
+        body: IndexedStack(
+          index: _selectedIndex,
+          children: _pages,
+        ),
+        bottomNavigationBar: BottomNavigationBar(
+          items: const <BottomNavigationBarItem>[
+            BottomNavigationBarItem(
+              icon: Icon(Icons.dashboard),
+              label: 'Dashboard',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.miscellaneous_services),
+              label: 'Services',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.build_circle_outlined),
+              label: 'Tools',
+            ),
+          ],
+          currentIndex: _selectedIndex,
+          onTap: _onItemTapped,
+        ),
       ),
     );
   }

@@ -10,6 +10,12 @@ import 'package:win_assist/features/maintenance/presentation/pages/maintenance_p
 import 'package:win_assist/features/logs/presentation/bloc/logs_bloc.dart';
 import 'package:win_assist/features/logs/presentation/bloc/logs_event.dart';
 import 'package:win_assist/features/logs/presentation/pages/logs_page.dart';
+// Dashboard (for domain detection)
+import 'package:win_assist/features/services/presentation/bloc/dashboard_bloc.dart';
+// Tasks
+import 'package:win_assist/features/tasks/presentation/bloc/tasks_bloc.dart';
+import 'package:win_assist/features/tasks/presentation/bloc/tasks_event.dart';
+import 'package:win_assist/features/tasks/presentation/pages/tasks_page.dart';
 
 class ToolsScreen extends StatelessWidget {
   const ToolsScreen({super.key});
@@ -21,15 +27,46 @@ class ToolsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          BlocBuilder<DashboardBloc, DashboardState>(
+            builder: (context, dashState) {
+              var title = 'Local Users Manager';
+              var subtitle = 'Manage local users on the server';
+              if (dashState is DashboardLoaded) {
+                final isDc = dashState.dashboardInfo.isDomainController;
+                if (isDc) {
+                  title = 'User Manager (AD)';
+                  subtitle = 'Manage Active Directory users on the domain controller';
+                } else {
+                  title = 'User Manager';
+                  subtitle = 'Manage local users on the server';
+                }
+              }
+
+              return Card(
+                child: ListTile(
+                  title: Text(title),
+                  subtitle: Text(subtitle),
+                  trailing: const Icon(Icons.people),
+                  onTap: () {
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<UsersBloc>(
+                      create: (_) => di.sl<UsersBloc>()..add(GetUsersEvent()),
+                      child: const UsersPage(),
+                    )));
+                  },
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
           Card(
             child: ListTile(
-              title: const Text('Local Users Manager'),
-              subtitle: const Text('Manage local users on the server'),
-              trailing: const Icon(Icons.people),
+              title: const Text('Task Scheduler'),
+              subtitle: const Text('View and manage scheduled tasks'),
+              trailing: const Icon(Icons.schedule),
               onTap: () {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<UsersBloc>(
-                  create: (_) => di.sl<UsersBloc>()..add(GetUsersEvent()),
-                  child: const UsersPage(),
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlocProvider<TasksBloc>(
+                  create: (_) => di.sl<TasksBloc>()..add(GetTasksEvent()),
+                  child: const TasksPage(),
                 )));
               },
             ),

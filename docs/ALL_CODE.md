@@ -106,6 +106,30 @@ Get-EventLog -LogName System -Newest 30 -EntryType Error,Warning |
 - Login screen:
   - `LoginScreen` now exposes an **SSH Port** field (`_portController`) with a default value of `22`. The login flow validates the port (1-65535) and uses the parsed port when establishing the SSH connection (fixes connection timeouts to servers running SSH on non-standard ports, e.g., `2223`).
 
+- Domain Controller detection & Tools UI:
+  - `getDashboardInfo` now fetches `DomainRole` from `Win32_ComputerSystem` (PowerShell: `$csInfo.DomainRole`). The `DashboardInfo` model now includes `domainRole` (int) and a getter `isDomainController` which returns `true` when role is `4` or `5`.
+  - `ToolsScreen` uses `DashboardBloc` state to show **"User Manager (AD)"** when connected to a domain controller, otherwise shows **"User Manager"** / **"Local Users Manager"**.
+  - **Note / Fix:** `DashboardBloc` is now provided at the `HomeScreen` level (wrapping the whole Scaffold) so that the `Tools` tab can access `DashboardBloc` state even though it is a different tab. This resolves an issue where `ToolsScreen` could not find the provider when the dashboard provider was only scoped to the Dashboard tab.
+
+- Tasks (Phase 7: Task Scheduler):
+  - Purpose: Manage Windows Scheduled Tasks (Run / Stop / list recent run result).
+  - Files added:
+    - `lib/features/tasks/domain/entities/scheduled_task.dart` (entity: `name`, `state`, `lastRunTime`, `lastTaskResult`)
+    - `lib/features/tasks/domain/repositories/tasks_repository.dart` (abstract repository)
+    - `lib/features/tasks/domain/usecases/get_tasks.dart`, `run_task.dart`, `stop_task.dart` (use cases)
+    - `lib/features/tasks/data/repositories/tasks_repository_impl.dart` (impl; uses `WindowsServiceDataSource`)
+    - `lib/features/tasks/presentation/bloc/tasks_event.dart`, `tasks_state.dart`, `tasks_bloc.dart` (Bloc)
+    - `lib/features/tasks/presentation/pages/tasks_page.dart` (UI: list of tasks, Run / Stop buttons)
+  - PowerShell command used by `WindowsServiceDataSource.getScheduledTasks()`:
+
+    ```powershell
+    $ProgressPreference = 'SilentlyContinue'; Get-ScheduledTask | Where-Object { $_.State -ne 'Disabled' } | 
+      Select-Object TaskName, State, @{N='LastRunTime';E={$_.GetTaskInfo().LastRunTime}}, @{N='LastTaskResult';E={$_.GetTaskInfo().LastTaskResult}} | 
+      ConvertTo-Json -Compress
+    ```
+
+  - Navigation: `ToolsScreen` now includes a "Task Scheduler" card that opens `TasksPage`.
+
   - Run logs (excerpt showing port support):
 
     ```text
@@ -116,11 +140,22 @@ Get-EventLog -LogName System -Newest 30 -EntryType Error,Warning |
     💡 Services fetched successfully: 247 services
     ```
 
+  - Fixes applied during implementation:
+    - Removed a duplicated `resetUserPassword` method that was accidentally inserted and caused a compilation error.
+    - Removed a duplicate `flutter_bloc` import in `ToolsScreen` that caused a duplicate-import compile warning.
+
 - Tests added:
   - `test/features/logs/domain/entities/log_entry_test.dart`
   - `test/features/logs/domain/usecases/get_system_logs_test.dart`
   - `test/features/logs/presentation/bloc/logs_bloc_test.dart`
   - `test/features/services/domain/entities/service_item_test.dart` (updated to validate numeric status mapping and rawStatus preservation)
+
+- Lint & analyzer fixes:
+  - Renamed type parameter `Type` → `T` in `lib/core/usecases/usecase.dart` to avoid `avoid_types_as_parameter_names` warning.
+  - Rewrote string concatenation in `lib/features/logs/presentation/pages/logs_page.dart` to use interpolation.
+  - Guarded `BuildContext` use across async gaps in `lib/features/services/presentation/pages/services_page.dart` by checking `mounted` after async calls.
+  - Replaced deprecated `withOpacity` with `withAlpha(...)` in RAM cards to avoid `deprecated_member_use` warnings.
+  - Cleaned up parameter names in `TasksPage` separator and local controller naming in `UsersPage` to satisfy analyzer rules.
 
 ---
 

@@ -14,7 +14,7 @@ class UsersPage extends StatelessWidget {
 }
 
 class _UsersView extends StatefulWidget {
-  const _UsersView({Key? key}) : super(key: key);
+  const _UsersView();
 
   @override
   State<_UsersView> createState() => _UsersViewState();
@@ -31,13 +31,13 @@ class _UsersViewState extends State<_UsersView> {
   }
 
   Future<void> _showResetDialog(String username) async {
-    final TextEditingController _passwordController = TextEditingController();
+    final TextEditingController passwordController = TextEditingController();
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text('Reset password for $username'),
         content: TextField(
-          controller: _passwordController,
+          controller: passwordController,
           obscureText: true,
           decoration: const InputDecoration(labelText: 'New password'),
         ),
@@ -52,7 +52,7 @@ class _UsersViewState extends State<_UsersView> {
     );
 
     if (result == true) {
-      final newPassword = _passwordController.text;
+      final newPassword = passwordController.text;
       _bloc.add(ResetUserPasswordEvent(username: username, newPassword: newPassword));
     }
   }

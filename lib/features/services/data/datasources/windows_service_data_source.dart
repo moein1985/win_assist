@@ -7,6 +7,7 @@ import 'package:win_assist/features/services/domain/entities/service_action.dart
 import 'package:win_assist/features/users/domain/entities/windows_user.dart';
 import 'package:win_assist/features/sessions/domain/entities/windows_session.dart';
 import 'package:win_assist/features/logs/domain/entities/log_entry.dart';
+import 'package:win_assist/features/tasks/domain/entities/scheduled_task.dart';
 
 abstract class WindowsServiceDataSource {
   Future<DashboardInfo> getDashboardInfo();
@@ -35,6 +36,11 @@ abstract class WindowsServiceDataSource {
   Future<String> flushDns();
   Future<void> restartServer();
   Future<void> shutdownServer();
+
+  // Tasks (Task Scheduler)
+  Future<List<ScheduledTask>> getScheduledTasks();
+  Future<void> runScheduledTask(String taskName);
+  Future<void> stopScheduledTask(String taskName);
 }
 
 class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
@@ -78,7 +84,7 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       throw Exception('Not connected. Please call connect() first.');
     }
 
-    const command = r'''$ProgressPreference = 'SilentlyContinue'; $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem; $csInfo = Get-CimInstance -ClassName Win32_ComputerSystem; $diskInfo = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"; @{ OsName = if ($osInfo.Caption) { $osInfo.Caption } else { "N/A" }; CsModel = if ($csInfo.Model) { $csInfo.Model } else { "N/A" }; CsTotalPhysicalMemory = if ($csInfo.TotalPhysicalMemory) { $csInfo.TotalPhysicalMemory } else { 0 }; OsFreePhysicalMemoryInBytes = if ($osInfo.FreePhysicalMemory) { [long]($osInfo.FreePhysicalMemory * 1024) } else { 0 }; DriveC_Free = if ($diskInfo.FreeSpace) { $diskInfo.FreeSpace } else { 0 }; DriveC_Total = if ($diskInfo.Size) { $diskInfo.Size } else { 0 } } | ConvertTo-Json -Compress''';
+    const command = r'''$ProgressPreference = 'SilentlyContinue'; $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem; $csInfo = Get-CimInstance -ClassName Win32_ComputerSystem; $diskInfo = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"; @{ OsName = if ($osInfo.Caption) { $osInfo.Caption } else { "N/A" }; CsModel = if ($csInfo.Model) { $csInfo.Model } else { "N/A" }; CsTotalPhysicalMemory = if ($csInfo.TotalPhysicalMemory) { $csInfo.TotalPhysicalMemory } else { 0 }; OsFreePhysicalMemoryInBytes = if ($osInfo.FreePhysicalMemory) { [long]($osInfo.FreePhysicalMemory * 1024) } else { 0 }; DriveC_Free = if ($diskInfo.FreeSpace) { $diskInfo.FreeSpace } else { 0 }; DriveC_Total = if ($diskInfo.Size) { $diskInfo.Size } else { 0 }; DomainRole = if ($csInfo.DomainRole -ne $null) { $csInfo.DomainRole } else { -1 } } | ConvertTo-Json -Compress''';
 
     logger.d('Executing getDashboardInfo command...');
     try {
@@ -234,6 +240,76 @@ class WindowsServiceDataSourceImpl implements WindowsServiceDataSource {
       rethrow;
     }
   }
+
+  // --- Tasks (Task Scheduler) ---
+  @override
+  Future<List<ScheduledTask>> getScheduledTasks() async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    const command = r'''$ProgressPreference = 'SilentlyContinue'; Get-ScheduledTask | Where-Object { $_.State -ne 'Disabled' } | Select-Object TaskName, State, @{N='LastRunTime';E={$_.GetTaskInfo().LastRunTime}}, @{N='LastTaskResult';E={$_.GetTaskInfo().LastTaskResult}} | ConvertTo-Json -Compress''';
+
+    logger.d('Executing getScheduledTasks command...');
+    try {
+      final jsonString = await _execute(command);
+      if (jsonString.isEmpty) {
+        logger.e('Received empty response from server for scheduled tasks.');
+        throw Exception('Received empty response from server for scheduled tasks.');
+      }
+
+      // Handle single object or list
+      if (jsonString.startsWith('{')) {
+        final Map<String, dynamic> jsonItem = jsonDecode(jsonString);
+        return [ScheduledTask.fromJson(jsonItem)];
+      }
+
+      final List<dynamic> jsonList = jsonDecode(jsonString);
+      return jsonList.map((json) => ScheduledTask.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      logger.e('Error getting scheduled tasks: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> runScheduledTask(String taskName) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = "Start-ScheduledTask -TaskName '${taskName.replaceAll("'", "''")}'";
+    logger.d('Executing runScheduledTask command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Run scheduled task completed. Output: $output');
+    } catch (e) {
+      logger.e('Error running scheduled task: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> stopScheduledTask(String taskName) async {
+    if (!isConnected) {
+      logger.e('Not connected. Please call connect() first.');
+      throw Exception('Not connected. Please call connect() first.');
+    }
+
+    final command = "Stop-ScheduledTask -TaskName '${taskName.replaceAll("'", "''")}'";
+    logger.d('Executing stopScheduledTask command: $command');
+    try {
+      final output = await _execute(command);
+      logger.i('Stop scheduled task completed. Output: $output');
+    } catch (e) {
+      logger.e('Error stopping scheduled task: $e');
+      rethrow;
+    }
+  }
+
+
 
   @override
   Future<void> resetUserPassword(String username, String newPassword) async {

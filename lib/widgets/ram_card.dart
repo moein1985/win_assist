@@ -27,7 +27,7 @@ class RamCard extends StatelessWidget {
                 style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
               ),
               progressColor: theme.colorScheme.primary,
-              backgroundColor: theme.colorScheme.primary.withOpacity(0.2),
+              backgroundColor: theme.colorScheme.primary.withAlpha((0.2 * 255).round()),
               circularStrokeCap: CircularStrokeCap.round,
             ),
             const SizedBox(width: 24),

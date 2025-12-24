@@ -56,6 +56,7 @@ class _ServicesPageState extends State<ServicesPage> {
     logger.i('ServicesPage Debug:\n$body');
 
     await Clipboard.setData(ClipboardData(text: body));
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debug report copied to clipboard')));
 
     showDialog(

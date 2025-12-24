@@ -9,6 +9,7 @@ class DashboardInfo {
   final double totalStorageInGB;
   final double freeStorageInGB;
   final double storageUsagePercentage;
+  final int domainRole;
 
   DashboardInfo({
     required this.osName,
@@ -19,7 +20,10 @@ class DashboardInfo {
     required this.totalStorageInGB,
     required this.freeStorageInGB,
     required this.storageUsagePercentage,
+    required this.domainRole,
   });
+
+  bool get isDomainController => domainRole == 4 || domainRole == 5;
 
   factory DashboardInfo.fromJson(Map<String, dynamic> json) {
     final totalRamBytes = (json['CsTotalPhysicalMemory'] as num?)?.toDouble() ?? 0.0;
@@ -49,6 +53,7 @@ class DashboardInfo {
       totalStorageInGB: totalStorageGB,
       freeStorageInGB: freeStorageGB,
       storageUsagePercentage: totalStorageGB > 0 ? (usedStorageGB / totalStorageGB) : 0,
+      domainRole: (json['DomainRole'] is num) ? (json['DomainRole'] as num).toInt() : int.tryParse(json['DomainRole']?.toString() ?? '') ?? -1,
     );
   }
 
@@ -63,6 +68,7 @@ class DashboardInfo {
       totalStorageInGB: 0,
       freeStorageInGB: 0,
       storageUsagePercentage: 0,
+      domainRole: -1,
     );
   }
 }

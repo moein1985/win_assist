@@ -47,8 +47,8 @@ class LogsPage extends StatelessWidget {
                 final color = _colorForType(log.entryType);
                 final icon = _iconForType(log.entryType);
                 final firstLine = log.message.split('\n').first;
-                final titleText = (log.entryType == LogEntryType.error ? 'Error' : 'Warning') + ' from ' + log.source;
-                final titleLine = log.source + '  •  #' + log.index.toString();
+                final titleText = '${log.entryType == LogEntryType.error ? 'Error' : 'Warning'} from ${log.source}';
+                final titleLine = '${log.source}  •  #${log.index}';
                 final trailingText = log.timeGenerated.toLocal().toString().substring(0, 19);
                 return InkWell(
                   onTap: () => showDialog(

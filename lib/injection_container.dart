@@ -41,6 +41,14 @@ import 'package:win_assist/features/logs/domain/repositories/logs_repository.dar
 import 'package:win_assist/features/logs/domain/usecases/get_system_logs.dart';
 import 'package:win_assist/features/logs/presentation/bloc/logs_bloc.dart';
 
+// Tasks feature
+import 'package:win_assist/features/tasks/data/repositories/tasks_repository_impl.dart';
+import 'package:win_assist/features/tasks/domain/repositories/tasks_repository.dart';
+import 'package:win_assist/features/tasks/domain/usecases/get_tasks.dart';
+import 'package:win_assist/features/tasks/domain/usecases/run_task.dart';
+import 'package:win_assist/features/tasks/domain/usecases/stop_task.dart';
+import 'package:win_assist/features/tasks/presentation/bloc/tasks_bloc.dart';
+
 final sl = GetIt.instance;
 
 Future<void> init() async {
@@ -99,6 +107,12 @@ Future<void> init() async {
   // Logs use case
   sl.registerLazySingleton(() => GetSystemLogs(sl()));
 
+  // Tasks repository & use cases
+  sl.registerLazySingleton<TasksRepository>(() => TasksRepositoryImpl(dataSource: sl(), logger: sl()));
+  sl.registerLazySingleton(() => GetTasks(sl()));
+  sl.registerLazySingleton(() => RunTask(sl()));
+  sl.registerLazySingleton(() => StopTask(sl()));
+
   // Blocs
   sl.registerFactory(() => DashboardBloc(getDashboardInfo: sl(), logger: sl()));
   sl.registerFactory(() => ServicesBloc(getServices: sl(), updateServiceStatus: sl(), logger: sl()));
@@ -106,4 +120,5 @@ Future<void> init() async {
   sl.registerFactory(() => SessionsBloc(getRemoteSessions: sl(), killSession: sl(), logger: sl()));
   sl.registerFactory(() => MaintenanceBloc(cleanTempFiles: sl(), flushDns: sl(), restartServer: sl(), shutdownServer: sl(), logger: sl()));
   sl.registerFactory(() => LogsBloc(getSystemLogs: sl(), logger: sl()));
+  sl.registerFactory(() => TasksBloc(getTasks: sl(), runTask: sl(), stopTask: sl(), logger: sl()));
 }
